@@ -4,15 +4,16 @@ import { Play, Pause, RotateCcw, Settings, Volume2, BellRing, VolumeX, Smartphon
 // --- 1. HOOKS DE UTILIDAD ---
 
 const usePersistentState = (key, initialValue) => {
-  const [state, setState] = useState(() => {
-    try {
-      const item = window.localStorage.getItem(key);
-      return item ? JSON.parse(item) : initialValue;
-    } catch (error) {
-      console.warn(`Error leyendo ${key} de localStorage`, error);
-      return initialValue;
-    }
-  });
+      const [state, setState] = useState(() => {
+        try {
+          const item = window.localStorage.getItem(key);
+          if (item === "undefined" || item === "null") return initialValue;
+          return item ? JSON.parse(item) : initialValue;
+        } catch (error) {
+          console.warn(`Error leyendo ${key} de localStorage`, error);
+          return initialValue;
+        }
+      });
 
   useEffect(() => {
     try {
@@ -625,34 +626,34 @@ export default function App() {
         <div className="bg-slate-900/60 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-[0_8px_32px_0_rgba(0,0,0,0.5)] border border-white/10 flex flex-col items-center relative overflow-hidden">
           
           {/* Overlay de Historial */}
-          {showHistory && (
-            <div className="absolute inset-0 z-50 bg-slate-900/95 backdrop-blur-xl flex flex-col p-6 rounded-[2.5rem] animate-in fade-in zoom-in-95 duration-200">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-black text-white flex items-center gap-2"><BarChart className="w-5 h-5 text-rose-400"/> Mi Historial</h2>
-                <button onClick={() => setShowHistory(false)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 active:scale-95 transition-all"><Minus className="w-5 h-5"/></button>
-              </div>
-              <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
-                {history.length === 0 ? (
-                  <p className="text-slate-400 text-sm text-center mt-10">Aún no hay entrenamientos guardados.</p>
-                ) : (
-                  history.map((s) => (
-                    <div key={s.id} className="bg-white/5 p-4 rounded-2xl flex justify-between items-center border border-white/5">
-                      <div>
-                        <span className="text-xs font-bold text-white/40 block mb-1">{new Date(s.date).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</span>
-                        <h3 className="font-black text-white uppercase tracking-wider">{s.mode}</h3>
-                      </div>
-                      <div className="text-right flex flex-col items-end">
-                        <div className="font-black text-lg text-emerald-400 tabular-nums leading-none">
-                          {Math.floor(s.totalTimeMs / 60000)}m {Math.floor((s.totalTimeMs % 60000) / 1000)}s
+              {showHistory && (
+                <div className="absolute inset-0 z-50 bg-slate-900/95 backdrop-blur-xl flex flex-col p-6 rounded-[2.5rem] animate-in fade-in zoom-in-95 duration-200">
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-black text-white flex items-center gap-2"><BarChart className="w-5 h-5 text-rose-400"/> Mi Historial</h2>
+                    <button onClick={() => setShowHistory(false)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 active:scale-95 transition-all"><Minus className="w-5 h-5"/></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
+                    {(!history || history.length === 0) ? (
+                      <p className="text-slate-400 text-sm text-center mt-10">Aún no hay entrenamientos guardados.</p>
+                    ) : (
+                      (history || []).map((s) => (
+                        <div key={s.id} className="bg-white/5 p-4 rounded-2xl flex justify-between items-center border border-white/5">
+                          <div>
+                            <span className="text-xs font-bold text-white/40 block mb-1">{new Date(s.date).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</span>
+                            <h3 className="font-black text-white uppercase tracking-wider">{s.mode}</h3>
+                          </div>
+                          <div className="text-right flex flex-col items-end">
+                            <div className="font-black text-lg text-emerald-400 tabular-nums leading-none">
+                              {Math.floor(s.totalTimeMs / 60000)}m {Math.floor((s.totalTimeMs % 60000) / 1000)}s
+                            </div>
+                            <span className="text-xs font-bold text-white/50 mt-1">{s.rounds} round{s.rounds>1?'s':''}</span>
+                          </div>
                         </div>
-                        <span className="text-xs font-bold text-white/50 mt-1">{s.rounds} round{s.rounds>1?'s':''}</span>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-          )}
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
 
           <div className={`w-full transition-all duration-500 ease-in-out ${isRunning && !isPaused ? 'opacity-0 -translate-y-4 pointer-events-none h-0 mb-0' : 'opacity-100 translate-y-0 h-14 mb-8'}`}>
             <div className="flex bg-slate-950/80 p-1.5 rounded-2xl border border-white/5 backdrop-blur-md">
