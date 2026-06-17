@@ -1,30 +1,30 @@
-const CACHE_NAME = 'timer-round-v1';
-const urlsToCache = [
-  './',
-  './index.html',
-  // Cacheamos las librerías CDN para que funcionen offline
-  'https://cdn.tailwindcss.com',
-  'https://unpkg.com/react@18/umd/react.production.min.js',
-  'https://unpkg.com/react-dom@18/umd/react-dom.production.min.js',
-  'https://unpkg.com/@babel/standalone/babel.min.js',
-  'https://unpkg.com/lucide@latest'
-];
+const CACHE_NAME = 'timer-round-v2';
 
-// Instalación: Guarda los archivos en caché
 self.addEventListener('install', event => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(urlsToCache))
-  );
+  self.skipWaiting(); // Fuerza la instalación inmediata del nuevo Service Worker
 });
 
-// Intercepción de red: Sirve desde caché si no hay internet
+self.addEventListener('activate', event => {
+  // Borra cualquier caché antigua (v1) para evitar que la app quede congelada en una versión rota
+  event.waitUntil(
+    caches.keys().then(cacheNames => {
+      return Promise.all(
+        cacheNames.map(cache => {
+          if (cache !== CACHE_NAME) {
+            console.log('Borrando caché antigua:', cache);
+            return caches.delete(cache);
+          }
+        })
+      );
+    })
+  );
+  self.clients.claim(); // Toma el control de la página inmediatamente
+});
+
 self.addEventListener('fetch', event => {
+  // Estrategia "Network First": Siempre intenta buscar la versión más nueva en internet.
+  // Solo si no hay internet (falla el fetch), busca en la caché.
   event.respondWith(
-    caches.match(event.request)
-      .then(response => {
-        // Devuelve la versión en caché o hace la petición a internet
-        return response || fetch(event.request);
-      })
+    fetch(event.request).catch(() => caches.match(event.request))
   );
 });
