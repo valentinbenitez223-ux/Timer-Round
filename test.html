@@ -7,9 +7,16 @@
 </head>
 <body>
   <div id="root"></div>
-  <script type="text/babel">
-    /** @jsx React.createElement */
-    /** @jsxFrag React.Fragment */
+  <script>
+    if (typeof Babel !== 'undefined') {
+      Babel.registerPreset('my-react', {
+        presets: [
+          [Babel.availablePresets['react'], { runtime: 'classic', throwIfNamespace: false }]
+        ]
+      });
+    }
+  </script>
+  <script type="text/babel" data-presets="my-react,env">
     console.log("Testing");
     const m = { icon: "span" };
     function App() {

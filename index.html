@@ -46,11 +46,6 @@
         React.useEffect(() => {
           if (svgRef.current && lucide.icons[name]) {
             try {
-              lucide.createIcons({
-                icons: { [name]: lucide.icons[name] },
-                nameAttr: 'data-lucide',
-                attrs: { class: className, fill: fill || 'none' }
-              });
               const svgEl = lucide.createElement(lucide.icons[name]);
               if(className) svgEl.setAttribute('class', className);
               if(fill) svgEl.setAttribute('fill', fill);
