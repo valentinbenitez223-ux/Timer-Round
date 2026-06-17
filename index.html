@@ -30,8 +30,6 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    /** @jsx React.createElement */
-    /** @jsxFrag React.Fragment */
     console.log("🚀 Babel script parsing started...");
     const createIcon = (name) => {
       return ({ className, fill }) => {
@@ -898,7 +896,7 @@
 
   <script>
     // Registro del Service Worker
-    if ('serviceWorker' in navigator) {
+    if ('serviceWorker' in navigator && window.location.protocol !== 'file:') {
       window.addEventListener('load', () => {
         navigator.serviceWorker.register('./sw.js')
           .then(registration => {
@@ -908,6 +906,8 @@
             console.log('Error al registrar el ServiceWorker:', error);
           });
       });
+    } else if ('serviceWorker' in navigator && window.location.protocol === 'file:') {
+      console.warn('ServiceWorker no se puede registrar usando el protocolo file://. Usa un servidor local.');
     }
   </script>
 </body>
