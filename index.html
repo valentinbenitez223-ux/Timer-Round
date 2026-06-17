@@ -29,7 +29,16 @@
 <body>
   <div id="root"></div>
 
-  <script type="text/babel">
+  <script>
+    if (typeof Babel !== 'undefined') {
+      Babel.registerPreset('my-react', {
+        presets: [
+          [Babel.availablePresets['react'], { runtime: 'classic', throwIfNamespace: false }]
+        ]
+      });
+    }
+  </script>
+  <script type="text/babel" data-presets="my-react,env">
     console.log("🚀 Babel script parsing started...");
     const createIcon = (name) => {
       return ({ className, fill }) => {
