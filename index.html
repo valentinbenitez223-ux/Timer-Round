@@ -1,0 +1,873 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Timer Round - Premium App</title>
+  
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#020617">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body {
+      margin: 0;
+      background-color: #020617;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel" data-type="module">
+    const createIcon = (name) => {
+      return ({ className, fill }) => {
+        const svgRef = React.useRef(null);
+        React.useEffect(() => {
+          if (svgRef.current) {
+            lucide.createIcons({
+              icons: { [name]: lucide.icons[name] },
+              nameAttr: 'data-lucide',
+              attrs: { class: className, fill: fill || 'none' }
+            });
+            const svgEl = lucide.createElement(lucide.icons[name]);
+            if(className) svgEl.setAttribute('class', className);
+            if(fill) svgEl.setAttribute('fill', fill);
+            
+            svgRef.current.innerHTML = '';
+            svgRef.current.appendChild(svgEl);
+          }
+        }, [className, fill]);
+        return <span ref={svgRef}></span>;
+      };
+    };
+
+    const Play = createIcon('Play');
+    const Pause = createIcon('Pause');
+    const RotateCcw = createIcon('RotateCcw');
+    const Settings = createIcon('Settings');
+    const Volume2 = createIcon('Volume2');
+    const BellRing = createIcon('BellRing');
+    const VolumeX = createIcon('VolumeX');
+    const Smartphone = createIcon('Smartphone');
+    const Dumbbell = createIcon('Dumbbell');
+    const Timer = createIcon('Timer');
+    const Shuffle = createIcon('Shuffle');
+    const ChevronDown = createIcon('ChevronDown');
+    const ChevronUp = createIcon('ChevronUp');
+    const Info = createIcon('Info');
+    const Minus = createIcon('Minus');
+    const Plus = createIcon('Plus');
+    const BarChart = createIcon('BarChart');
+
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    const usePersistentState = (key, initialValue) => {
+      const [state, setState] = useState(() => {
+        try {
+          const item = window.localStorage.getItem(key);
+          return item ? JSON.parse(item) : initialValue;
+        } catch (error) {
+          console.warn(`Error leyendo ${key} de localStorage`, error);
+          return initialValue;
+        }
+      });
+
+      useEffect(() => {
+        try {
+          window.localStorage.setItem(key, JSON.stringify(state));
+        } catch (error) {
+          console.warn(`Error guardando ${key} en localStorage`, error);
+        }
+      }, [key, state]);
+
+      return [state, setState];
+    };
+
+    const useWakeLock = (isRunning) => {
+      const wakeLockRef = useRef(null);
+      const fallbackVideoRef = useRef(null);
+
+      const requestWakeLock = useCallback(async () => {
+        try {
+          if ('wakeLock' in navigator) {
+            if (wakeLockRef.current) wakeLockRef.current.release().catch(() => {});
+            wakeLockRef.current = await navigator.wakeLock.request('screen');
+            wakeLockRef.current.onrelease = () => {
+              wakeLockRef.current = null;
+              if (document.visibilityState === 'visible' && isRunning) {
+                requestWakeLock();
+              }
+            };
+          }
+        } catch (err) {
+          console.warn("WakeLock falló, usando fallback de video.");
+        }
+        if (fallbackVideoRef.current) fallbackVideoRef.current.play().catch(()=>{});
+      }, [isRunning]);
+
+      const releaseWakeLock = useCallback(() => {
+        if (wakeLockRef.current !== null) {
+          wakeLockRef.current.onrelease = null;
+          wakeLockRef.current.release().catch(() => {});
+          wakeLockRef.current = null;
+        }
+        if (fallbackVideoRef.current) fallbackVideoRef.current.pause();
+      }, []);
+
+      useEffect(() => {
+        const handleVis = () => { if (document.visibilityState === 'visible' && isRunning) requestWakeLock(); };
+        document.addEventListener('visibilitychange', handleVis);
+        return () => {
+          document.removeEventListener('visibilitychange', handleVis);
+          releaseWakeLock();
+        };
+      }, [isRunning, requestWakeLock, releaseWakeLock]);
+
+      return { requestWakeLock, releaseWakeLock, fallbackVideoRef };
+    };
+
+    const useTimerWorker = (updateTimerCallback) => {
+      const workerRef = useRef(null);
+      const callbackRef = useRef(updateTimerCallback);
+
+      useEffect(() => {
+        callbackRef.current = updateTimerCallback;
+      }, [updateTimerCallback]);
+
+      useEffect(() => {
+        const workerCode = `
+          let timerId = null;
+          self.onmessage = function(e) {
+            if (e.data.command === 'START') {
+              if (timerId) clearInterval(timerId);
+              timerId = setInterval(() => {
+                self.postMessage({ type: 'TICK' });
+              }, e.data.interval || 100);
+            } else if (e.data.command === 'STOP') {
+              clearInterval(timerId);
+              timerId = null;
+            }
+          };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        workerRef.current = new Worker(workerUrl);
+
+        workerRef.current.onmessage = (e) => {
+          if (e.data.type === 'TICK' && callbackRef.current) {
+            callbackRef.current(); 
+          }
+        };
+
+        return () => {
+          workerRef.current.terminate();
+          URL.revokeObjectURL(workerUrl);
+        };
+      }, []);
+
+      const startWorker = useCallback((intervalMs = 100) => {
+        if (workerRef.current) {
+          workerRef.current.postMessage({ command: 'START', interval: intervalMs });
+        }
+      }, []);
+
+      const stopWorker = useCallback(() => {
+        if (workerRef.current) {
+          workerRef.current.postMessage({ command: 'STOP' });
+        }
+      }, []);
+
+      return { startWorker, stopWorker };
+    };
+
+    const useKeyboardShortcuts = (onTogglePlayPause, onReset) => {
+      const actionsRef = useRef({ onTogglePlayPause, onReset });
+
+      useEffect(() => {
+        actionsRef.current = { onTogglePlayPause, onReset };
+      }, [onTogglePlayPause, onReset]);
+
+      useEffect(() => {
+        const handleKeyDown = (e) => {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+          if (e.code === 'Space') {
+            e.preventDefault(); 
+            actionsRef.current.onTogglePlayPause();
+          } else if (e.key.toLowerCase() === 'r') {
+            actionsRef.current.onReset();
+          }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+      }, []);
+    };
+
+    const BigNumberInput = ({ label, value, onChange, color, min = 0, max = 999 }) => (
+      <div className="flex flex-col items-center justify-between p-2 bg-white/5 rounded-2xl border border-white/5 transition-colors h-full">
+        <label className={`text-[10px] font-bold ${color} mb-1 tracking-wider uppercase`}>{label}</label>
+        <button aria-label={`Aumentar ${label}`} onClick={() => onChange(Math.min(max, value + 1))} className="w-full py-3 bg-white/5 rounded-lg hover:bg-white/20 active:scale-95 text-white/70 mb-2 flex justify-center transition-colors">
+          <Plus className="w-5 h-5"/>
+        </button>
+        <span className="text-4xl font-black text-white select-none">{value}</span>
+        <button aria-label={`Disminuir ${label}`} onClick={() => onChange(Math.max(min, value - 1))} className="w-full py-3 bg-white/5 rounded-lg hover:bg-white/20 active:scale-95 text-white/70 mt-2 flex justify-center transition-colors">
+          <Minus className="w-5 h-5"/>
+        </button>
+      </div>
+    );
+
+    const TimerDisplay = React.memo(React.forwardRef(({ uiPhase, mode, isPaused, targetTimeRef, getInitialTimeForMode }, ref) => {
+      const [timeLeft, setTimeLeft] = useState(0);
+
+      React.useImperativeHandle(ref, () => ({
+        setTime: (t) => setTimeLeft(t)
+      }));
+
+      const formatTime = (ms) => {
+        if (ms <= 0) return { time: "00:00", tenths: ".0" };
+        const totalSeconds = Math.ceil(ms / 1000);
+        const m = Math.floor(totalSeconds / 60);
+        const s = totalSeconds % 60;
+        const tenths = Math.floor((ms % 1000) / 100);
+        return { time: `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`, tenths: `.${tenths}` };
+      };
+
+      const getThemeColors = () => {
+        if (uiPhase === 'PREP') return { text: 'text-amber-400', ring: 'text-amber-400', glow: 'drop-shadow-[0_0_25px_rgba(251,191,36,0.6)]' };
+        if (uiPhase === 'REST') return { text: 'text-cyan-400', ring: 'text-cyan-400', glow: 'drop-shadow-[0_0_25px_rgba(34,211,238,0.6)]' };
+        if (uiPhase === 'FINISHED') return { text: 'text-emerald-400', ring: 'text-emerald-400', glow: 'drop-shadow-[0_0_30px_rgba(52,211,153,0.8)]' };
+        if (isPaused) return { text: 'text-slate-300', ring: 'text-slate-400', glow: 'drop-shadow-[0_0_15px_rgba(148,163,184,0.3)]' };
+        if (mode === 'TABATA') return { text: 'text-fuchsia-400', ring: 'text-fuchsia-400', glow: 'drop-shadow-[0_0_25px_rgba(232,121,249,0.5)]' };
+        if (mode === 'BASIC') return { text: 'text-blue-400', ring: 'text-blue-400', glow: 'drop-shadow-[0_0_25px_rgba(96,165,250,0.5)]' };
+        return { text: 'text-rose-400', ring: 'text-rose-400', glow: 'drop-shadow-[0_0_25px_rgba(251,113,133,0.5)]' };
+      };
+
+      const timeDisplay = formatTime(timeLeft);
+      const totalPhaseTime = targetTimeRef.current || getInitialTimeForMode(mode);
+      const progressPercent = totalPhaseTime > 0 ? (uiPhase === 'FINISHED' ? 100 : ((totalPhaseTime - timeLeft) / totalPhaseTime) * 100) : 0;
+      
+      const theme = getThemeColors();
+      const circumference = 2 * Math.PI * 120;
+      const strokeDashoffset = uiPhase === 'FINISHED' ? 0 : circumference - (progressPercent / 100) * circumference;
+
+      return (
+        <div className="relative mb-10 mt-4 flex flex-col items-center justify-center" aria-live="polite">
+          <div className="relative w-72 h-72 flex items-center justify-center">
+            <svg className="absolute inset-0 w-full h-full transform -rotate-90 filter drop-shadow-lg">
+              <circle cx="144" cy="144" r="120" stroke="currentColor" strokeWidth="6" fill="none" className="text-white/5" />
+              <circle cx="144" cy="144" r="120" stroke="currentColor" strokeWidth="8" fill="none" strokeLinecap="round"
+                className={`${theme.ring} transition-all duration-100 ease-linear filter drop-shadow-[0_0_8px_rgba(255,255,255,0.3)]`}
+                strokeDasharray={circumference} 
+                strokeDashoffset={strokeDashoffset || 0}
+              />
+            </svg>
+
+            <div className="z-10 flex flex-col items-center justify-center text-center absolute inset-0">
+              {uiPhase === 'PREP' ? (
+                <div className="animate-pulse scale-110 transition-transform">
+                   <span className={`text-[6rem] font-black tabular-nums leading-none tracking-tighter ${theme.text} ${theme.glow}`}>
+                     {Math.max(1, Math.ceil(timeLeft / 1000))}
+                   </span>
+                </div>
+              ) : (
+                <div className={`flex items-baseline justify-center ${uiPhase === 'FINISHED' ? 'scale-110 transition-transform duration-500' : ''}`}>
+                  <span className={`text-6xl sm:text-[5rem] font-black tracking-tighter tabular-nums leading-none ${theme.text} ${theme.glow}`}>
+                    {timeDisplay.time}
+                  </span>
+                  <span className={`text-2xl sm:text-3xl font-bold opacity-60 ml-1 ${theme.text}`}>
+                    {timeDisplay.tenths}
+                  </span>
+                </div>
+              )}
+              
+              <p className={`mt-4 font-bold tracking-[0.2em] text-sm uppercase transition-colors duration-300 ${uiPhase === 'FINISHED' ? theme.text : uiPhase === 'PREP' ? 'text-amber-400' : uiPhase === 'REST' ? 'text-cyan-400' : isPaused ? 'text-slate-400' : 'text-white/70'}`}>
+                {uiPhase === 'FINISHED' ? '¡COMPLETADO!' : uiPhase === 'WORK' ? 'TRABAJO' : uiPhase === 'REST' ? 'DESCANSO' : uiPhase === 'PREP' ? 'PREPÁRATE' : isPaused ? 'PAUSADO' : 'LISTO'}
+              </p>
+            </div>
+          </div>
+        </div>
+      );
+    }));
+
+    function App() {
+      const [history, setHistory] = usePersistentState('timer_history', []);
+      const [showHistory, setShowHistory] = useState(false);
+
+      const [mode, setMode] = usePersistentState('timer_mode', 'RND');
+      const [voiceEnabled, setVoiceEnabled] = usePersistentState('timer_voice', true);
+      const [showSettings, setShowSettings] = useState(false);
+
+      const [presetMinutes, setPresetMinutes] = usePersistentState('timer_rnd_min', 1);
+      const [alertCount, setAlertCount] = usePersistentState('timer_rnd_alerts', 10);
+      const [tabataWork, setTabataWork] = usePersistentState('timer_tabata_work', 20);
+      const [tabataRest, setTabataRest] = usePersistentState('timer_tabata_rest', 10);
+      const [tabataRounds, setTabataRounds] = usePersistentState('timer_tabata_rounds', 8);
+      const [basicMin, setBasicMin] = usePersistentState('timer_basic_min', 5);
+      const [basicSec, setBasicSec] = usePersistentState('timer_basic_sec', 0);
+
+      const [isRunning, setIsRunning] = useState(false);
+      const [isPaused, setIsPaused] = useState(false);
+      const [uiPhase, setUiPhase] = useState('IDLE');
+      const [uiRound, setUiRound] = useState(1);
+      const [flash, setFlash] = useState(false);
+      const [alertsPlayed, setAlertsPlayed] = useState(0);
+      
+      const [activeBtn, setActiveBtn] = useState(null);
+
+      const { requestWakeLock, releaseWakeLock, fallbackVideoRef } = useWakeLock(isRunning);
+
+      const modeRef = useRef(mode);
+      const phaseRef = useRef('IDLE');
+      const roundRef = useRef(1);
+      const endTimeRef = useRef(null);
+      const targetTimeRef = useRef(0);
+      const flashTimeoutRef = useRef(null);
+      const lastRenderRef = useRef(0);
+      const timerDisplayRef = useRef(null);
+      const timeLeftRef = useRef(0);
+      
+      const audioCtxRef = useRef(null);
+      const voiceFlagsRef = useRef({ halfway: false, tenSeconds: false });
+      const lastPrepBeepRef = useRef(0);
+      const rndScheduleRef = useRef([]);
+      const nextAlertIndexRef = useRef(0);
+
+      useEffect(() => { modeRef.current = mode; }, [mode]);
+
+      useEffect(() => {
+        return () => {
+          if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+          if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        };
+      }, []);
+
+      const getAudioContext = useCallback(() => {
+        if (!audioCtxRef.current) {
+          const AudioContext = window.AudioContext || window.webkitAudioContext;
+          if (AudioContext) audioCtxRef.current = new AudioContext();
+        }
+        if (audioCtxRef.current?.state === 'suspended') {
+          audioCtxRef.current.resume();
+        }
+        return audioCtxRef.current;
+      }, []);
+
+      const speak = useCallback((text, cancelCurrent = false) => {
+        if (!voiceEnabled || !('speechSynthesis' in window)) return;
+        if (cancelCurrent && window.speechSynthesis.speaking) {
+          window.speechSynthesis.cancel();
+        }
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.lang = 'es-AR';
+        utterance.rate = 1.3;
+        utterance.pitch = 1.1;
+        setTimeout(() => window.speechSynthesis.speak(utterance), 50);
+      }, [voiceEnabled]);
+
+      const triggerFlash = useCallback(() => {
+        setFlash(true);
+        if (flashTimeoutRef.current) clearTimeout(flashTimeoutRef.current);
+        flashTimeoutRef.current = setTimeout(() => setFlash(false), 150);
+      }, []);
+
+      const triggerBtnFeedback = useCallback((btn) => {
+        setActiveBtn(btn);
+        setTimeout(() => setActiveBtn(null), 150);
+      }, []);
+
+      const playTone = useCallback((freq, type, duration, vol, isFlash = false, vibrationPattern = null) => {
+        const ctx = getAudioContext();
+        if (!ctx) return;
+        const osc = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        osc.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, ctx.currentTime);
+        gainNode.gain.setValueAtTime(0, ctx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.02);
+        gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + duration);
+
+        if (isFlash) triggerFlash();
+        if (vibrationPattern && navigator.vibrate) {
+          try { navigator.vibrate(vibrationPattern); } catch (e) {}
+        }
+      }, [getAudioContext, triggerFlash]);
+
+      const playAlertBeep = useCallback(() => playTone(2000, 'sine', 0.2, 1, true, [100, 50, 100]), [playTone]);
+      const playPrepBeep = useCallback((isGo) => {
+        if (isGo) playTone(1200, 'triangle', 0.5, 0.8, true, [400]); 
+        else playTone(600, 'sine', 0.15, 0.5, false, [100]); 
+      }, [playTone]);
+
+      const generateRndSchedule = useCallback((totalMs, count) => {
+        if (count <= 0) return [];
+        const activeWindow = totalMs * 0.9;
+        const windowStart = totalMs * 0.05;
+        const blockSize = activeWindow / count;
+        
+        return Array.from({ length: count }, (_, i) => {
+          const blockStart = windowStart + i * blockSize;
+          const safeBlockSize = blockSize * 0.8;
+          const time = Math.floor(blockStart + (blockSize * 0.1) + Math.random() * safeBlockSize);
+          return { time, played: false };
+        });
+      }, []);
+
+      const getInitialTimeForMode = useCallback((m) => {
+        if (m === 'RND') return presetMinutes * 60 * 1000;
+        if (m === 'TABATA') return tabataWork * 1000;
+        if (m === 'BASIC') return (basicMin * 60 + basicSec) * 1000;
+        return 0;
+      }, [presetMinutes, tabataWork, basicMin, basicSec]);
+
+      const handlePhaseTransition = useCallback(() => {
+        const currentMode = modeRef.current;
+        const now = Date.now();
+
+        if (phaseRef.current === 'PREP') {
+          phaseRef.current = 'WORK';
+          targetTimeRef.current = getInitialTimeForMode(currentMode);
+          endTimeRef.current = now + targetTimeRef.current;
+          playPrepBeep(true);
+          speak(currentMode === 'TABATA' ? '¡A trabajar!' : '¡Comenzamos!', true);
+        } else if (phaseRef.current === 'WORK') {
+          if (currentMode === 'TABATA' && roundRef.current < tabataRounds) {
+            phaseRef.current = 'REST';
+            targetTimeRef.current = Math.max(1, tabataRest) * 1000;
+            endTimeRef.current = now + targetTimeRef.current;
+            playTone(400, 'sine', 0.5, 0.8, true, [200, 100, 200]);
+            speak('Descanso', true);
+          } else {
+            phaseRef.current = 'FINISHED';
+            setIsRunning(false);
+            releaseWakeLock();
+            
+            const sessionTotalTime = getInitialTimeForMode(currentMode);
+            const newSession = {
+              id: Date.now(),
+              date: new Date().toISOString(),
+              mode: currentMode,
+              rounds: roundRef.current,
+              totalTimeMs: currentMode === 'TABATA' 
+                ? ((tabataWork + tabataRest) * tabataRounds - tabataRest) * 1000 
+                : sessionTotalTime
+            };
+            setHistory(prev => [newSession, ...prev].slice(0, 50));
+
+            setTimeout(playAlertBeep, 0);
+            setTimeout(playAlertBeep, 200);
+            setTimeout(playAlertBeep, 400);
+            setTimeout(() => speak('¡Entrenamiento completado! ¡Gran trabajo!', true), 800);
+            return false;
+          }
+        } else if (phaseRef.current === 'REST') {
+          phaseRef.current = 'WORK';
+          roundRef.current++;
+          targetTimeRef.current = Math.max(1, tabataWork) * 1000;
+          endTimeRef.current = now + targetTimeRef.current;
+          playPrepBeep(true);
+          speak(`Ronda ${roundRef.current}`, true);
+        }
+        
+        voiceFlagsRef.current = { halfway: false, tenSeconds: false };
+        return true; 
+      }, [getInitialTimeForMode, tabataRest, tabataRounds, tabataWork, playPrepBeep, speak, playTone, playAlertBeep, releaseWakeLock, setHistory]);
+
+      const updateTimer = useCallback(() => {
+        if (!isRunning) return;
+        const now = Date.now();
+        let remaining = endTimeRef.current - now;
+
+        if (remaining <= 0) {
+          const shouldContinue = handlePhaseTransition();
+          if (!shouldContinue) {
+            setUiPhase('FINISHED');
+            if (timerDisplayRef.current) timerDisplayRef.current.setTime(0);
+            return;
+          }
+          remaining = endTimeRef.current - now; 
+        }
+
+        const currentSec = Math.ceil(remaining / 1000);
+
+        if (phaseRef.current === 'PREP' || phaseRef.current === 'REST') {
+          if (currentSec !== lastPrepBeepRef.current && currentSec <= 3 && currentSec > 0) {
+            playPrepBeep(false);
+            lastPrepBeepRef.current = currentSec;
+          }
+        } else if (phaseRef.current === 'WORK') {
+          const totalPhaseMs = targetTimeRef.current;
+          const elapsedTime = totalPhaseMs - remaining;
+          const currentMode = modeRef.current;
+
+          if (currentMode === 'RND') {
+            const schedule = rndScheduleRef.current;
+            const nextIdx = nextAlertIndexRef.current;
+            if (nextIdx < schedule.length && elapsedTime >= schedule[nextIdx].time) {
+              playAlertBeep();
+              schedule[nextIdx].played = true;
+              setAlertsPlayed(p => p + 1);
+              nextAlertIndexRef.current++;
+            }
+          }
+
+          if (voiceEnabled && currentMode !== 'TABATA') { 
+            const halfTimeMs = totalPhaseMs / 2;
+            if (!voiceFlagsRef.current.halfway && remaining <= halfTimeMs) {
+              voiceFlagsRef.current.halfway = true;
+              speak('Mitad de tiempo', false);
+            }
+            if (!voiceFlagsRef.current.tenSeconds && remaining <= 10000) {
+              voiceFlagsRef.current.tenSeconds = true;
+              speak('Diez segundos', false);
+            }
+          }
+        }
+
+        timeLeftRef.current = remaining;
+
+        if (now - lastRenderRef.current >= 75 || remaining <= 0) {
+          setUiPhase(prev => (prev !== phaseRef.current ? phaseRef.current : prev));
+          setUiRound(prev => (prev !== roundRef.current ? roundRef.current : prev));
+          if (timerDisplayRef.current) timerDisplayRef.current.setTime(remaining);
+          lastRenderRef.current = now;
+        }
+        
+      }, [isRunning, handlePhaseTransition, playPrepBeep, playAlertBeep, speak, voiceEnabled]);
+
+      const { startWorker, stopWorker } = useTimerWorker(updateTimer);
+
+      const startTimer = () => {
+        if (getInitialTimeForMode(mode) <= 0) return;
+
+        getAudioContext();
+        requestWakeLock();
+        if (voiceEnabled && 'speechSynthesis' in window) {
+          if (window.speechSynthesis.speaking) window.speechSynthesis.cancel();
+          window.speechSynthesis.speak(new SpeechSynthesisUtterance('')); 
+        }
+
+        if (!isPaused) {
+          phaseRef.current = 'PREP';
+          roundRef.current = 1;
+          targetTimeRef.current = 3000;
+          timeLeftRef.current = 3000;
+          endTimeRef.current = Date.now() + 3000;
+          lastPrepBeepRef.current = 4;
+          setAlertsPlayed(0);
+          nextAlertIndexRef.current = 0;
+          
+          if (mode === 'RND') {
+            rndScheduleRef.current = generateRndSchedule(Math.max(1, presetMinutes) * 60 * 1000, alertCount);
+          }
+          setShowSettings(false);
+          setShowHistory(false);
+          setUiPhase('PREP');
+          setUiRound(1);
+          if (timerDisplayRef.current) timerDisplayRef.current.setTime(3000);
+        } else {
+          endTimeRef.current = Date.now() + timeLeftRef.current;
+        }
+
+        setIsRunning(true);
+        setIsPaused(false);
+        startWorker(75);
+      };
+
+      const pauseTimer = () => {
+        const exactRemaining = Math.max(0, endTimeRef.current - Date.now());
+        timeLeftRef.current = exactRemaining;
+        if (timerDisplayRef.current) timerDisplayRef.current.setTime(exactRemaining);
+        setIsRunning(false);
+        setIsPaused(true);
+        releaseWakeLock();
+        stopWorker();
+      };
+
+      const resetTimer = () => {
+        setIsRunning(false);
+        setIsPaused(false);
+        releaseWakeLock();
+        stopWorker();
+        
+        phaseRef.current = 'IDLE';
+        roundRef.current = 1;
+        setAlertsPlayed(0);
+        nextAlertIndexRef.current = 0;
+        setUiPhase('IDLE');
+        setUiRound(1);
+        
+        const initTime = getInitialTimeForMode(mode);
+        timeLeftRef.current = initTime;
+        if (timerDisplayRef.current) timerDisplayRef.current.setTime(initTime);
+      };
+
+      const handleTogglePlayPause = useCallback(() => {
+        if (getInitialTimeForMode(mode) <= 0) return;
+        
+        if (!isRunning) {
+          triggerBtnFeedback('play');
+          startTimer();
+        } else {
+          triggerBtnFeedback('pause');
+          pauseTimer();
+        }
+      }, [isRunning, mode, startTimer, pauseTimer, getInitialTimeForMode, triggerBtnFeedback]);
+
+      const handleValidReset = useCallback(() => {
+        if (isRunning || isPaused || uiPhase === 'FINISHED') {
+          triggerBtnFeedback('reset');
+          resetTimer();
+        }
+      }, [isRunning, isPaused, uiPhase, resetTimer, triggerBtnFeedback]);
+
+      useKeyboardShortcuts(handleTogglePlayPause, handleValidReset);
+
+      useEffect(() => {
+        if (!isRunning && !isPaused) {
+          const initTime = getInitialTimeForMode(mode);
+          timeLeftRef.current = initTime;
+          if (timerDisplayRef.current) timerDisplayRef.current.setTime(initTime);
+        }
+      }, [mode, presetMinutes, tabataWork, basicMin, basicSec, isRunning, isPaused, getInitialTimeForMode]);
+
+      const tabataTotalSeconds = (tabataWork + tabataRest) * tabataRounds - tabataRest;
+      const tabataTotalDisplay = `${Math.floor(tabataTotalSeconds / 60)}m ${tabataTotalSeconds % 60}s`;
+      const rndDensity = Math.round((presetMinutes * 60) / alertCount);
+      const isTimeZero = getInitialTimeForMode(mode) <= 0;
+
+      const getAppBgColor = () => {
+        if (uiPhase === 'PREP') return 'from-amber-500/20 to-orange-600/20';
+        if (uiPhase === 'REST') return 'from-cyan-500/20 to-blue-600/20';
+        if (uiPhase === 'FINISHED') return 'from-emerald-500/20 to-teal-600/20';
+        if (isPaused) return 'from-slate-700/50 to-slate-800/50';
+        if (mode === 'TABATA') return 'from-violet-600/20 to-fuchsia-600/20';
+        if (mode === 'BASIC') return 'from-blue-600/20 to-indigo-600/20';
+        return 'from-rose-600/20 to-pink-600/20';
+      };
+
+      const getStartBtnColor = () => {
+        if (isTimeZero) return 'bg-slate-800 text-slate-500 cursor-not-allowed opacity-50 pointer-events-none';
+        if (uiPhase === 'PREP') return 'bg-amber-500 hover:bg-amber-400 text-amber-950 shadow-amber-500/40';
+        if (uiPhase === 'REST') return 'bg-cyan-500 hover:bg-cyan-400 text-cyan-950 shadow-cyan-500/40';
+        if (uiPhase === 'FINISHED') return 'bg-emerald-500 hover:bg-emerald-400 text-emerald-950 shadow-emerald-500/40';
+        if (isPaused) return 'bg-slate-500 hover:bg-slate-400 text-slate-950 shadow-slate-500/40';
+        if (mode === 'TABATA') return 'bg-gradient-to-r from-violet-500 to-fuchsia-500 hover:from-violet-400 hover:to-fuchsia-400 text-white shadow-fuchsia-500/40';
+        if (mode === 'BASIC') return 'bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-400 hover:to-indigo-400 text-white shadow-blue-500/40';
+        return 'bg-gradient-to-r from-rose-500 to-pink-500 hover:from-rose-400 hover:to-pink-400 text-white shadow-rose-500/40';
+      };
+
+      return (
+        <div className="min-h-screen relative overflow-hidden flex items-center justify-center font-sans text-slate-100 p-4 sm:p-8 select-none transition-colors duration-500 bg-slate-950">
+          <div className={`absolute inset-0 bg-gradient-to-br ${getAppBgColor()} transition-all duration-1000 ease-in-out opacity-60`}></div>
+          {flash && <div className="absolute inset-0 bg-red-600/40 mix-blend-overlay z-50 pointer-events-none transition-opacity duration-150"></div>}
+          
+          <video ref={fallbackVideoRef} playsInline muted loop src="data:video/mp4;base64,AAAAIGZ0eXBpc29tAAACAGlzb21pc28yYXZjMQAAAAhmcmVlAAAAQG1kYXQAAAAwAABBwAAAAgAAAGQAAABsAAAAYAAAAGgAAAA0AAAAAQQAAAEAAABkAAAAbAAAAGAAAABoAAAANAAAAAAQAAAAX21vb3YAAABsbXZoZAAAAAB8JQAAAAAAfCUAAAAAAAABAAABAAABAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAADGlvZHMAAAAAEICQAAAAAHB0cmFrAAAAXHRraGQAAAAAfCUAAAAAAHwlAAAAAAAAAAAAAQAAAAAAAAACAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAEAAAAAABAAAAAQAAAAAACRlZHRzAAAAHGVsc3QAAAAAAAAAAQAAABQAAAAAAAABAAAAAABobWRpYQAAACBtZGhkAAAAAHwlAAAAAAB8JQAAAAAAAVcQAAAAAAAALWhkbHIAAAAAAAAAAHZpZGUAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAALG1pbmYAAAAUdm1oZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAFBzdGJsAAAAaHN0c2QAAAAAAAAAAQAAAFhhdmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAEAAABkAAAAAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAGP//AAAAMWF2Y0MBAQAo/xQAAgAAAAMAAAAAABAAAQAAABgAAABoAAAANAAAAAEEAAABAAAAAAACAAAAAABzdHRzAAAAAAAAAAEAAAACAAAAAAAUc3RzYwAAAAAAAAABAAAAAQAAAAIAAAABAAAAFHN0c3oAAAAAAAAAAAAAAAIAAABQAAAADHN0Y28AAAAAAAAAAQAAACA=" className="hidden" style={{ display: 'none', width: 0, height: 0, position: 'absolute' }} />
+
+          <div className="w-full max-w-md relative z-10 flex flex-col gap-6">
+            
+            <div className="bg-slate-900/60 backdrop-blur-xl p-8 rounded-[2.5rem] shadow-[0_8px_32px_0_rgba(0,0,0,0.5)] border border-white/10 flex flex-col items-center relative overflow-hidden">
+              
+              {showHistory && (
+                <div className="absolute inset-0 z-50 bg-slate-900/95 backdrop-blur-xl flex flex-col p-6 rounded-[2.5rem] animate-in fade-in zoom-in-95 duration-200">
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-black text-white flex items-center gap-2"><BarChart className="w-5 h-5 text-rose-400"/> Mi Historial</h2>
+                    <button onClick={() => setShowHistory(false)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 active:scale-95 transition-all"><Minus className="w-5 h-5"/></button>
+                  </div>
+                  <div className="flex-1 overflow-y-auto space-y-3 pr-2 scrollbar-hide">
+                    {history.length === 0 ? (
+                      <p className="text-slate-400 text-sm text-center mt-10">Aún no hay entrenamientos guardados.</p>
+                    ) : (
+                      history.map((s) => (
+                        <div key={s.id} className="bg-white/5 p-4 rounded-2xl flex justify-between items-center border border-white/5">
+                          <div>
+                            <span className="text-xs font-bold text-white/40 block mb-1">{new Date(s.date).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'})}</span>
+                            <h3 className="font-black text-white uppercase tracking-wider">{s.mode}</h3>
+                          </div>
+                          <div className="text-right flex flex-col items-end">
+                            <div className="font-black text-lg text-emerald-400 tabular-nums leading-none">
+                              {Math.floor(s.totalTimeMs / 60000)}m {Math.floor((s.totalTimeMs % 60000) / 1000)}s
+                            </div>
+                            <span className="text-xs font-bold text-white/50 mt-1">{s.rounds} round{s.rounds>1?'s':''}</span>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className={`w-full transition-all duration-500 ease-in-out ${isRunning && !isPaused ? 'opacity-0 -translate-y-4 pointer-events-none h-0 mb-0' : 'opacity-100 translate-y-0 h-14 mb-8'}`}>
+                <div className="flex bg-slate-950/80 p-1.5 rounded-2xl border border-white/5 backdrop-blur-md">
+                  <div className="flex-1 flex gap-1.5">
+                    {[
+                      { id: 'RND', icon: Shuffle, label: 'RND' },
+                      { id: 'TABATA', icon: Dumbbell, label: 'TABATA' },
+                      { id: 'BASIC', icon: Timer, label: 'BASIC' }
+                    ].map(m => (
+                      <button 
+                        key={m.id}
+                        onClick={() => { setMode(m.id); resetTimer(); }} 
+                        className={`flex-1 flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs sm:text-sm font-bold transition-all duration-300 ${mode === m.id ? 'bg-white/10 text-white shadow-lg' : 'text-slate-400 hover:text-white hover:bg-white/5'}`}
+                      >
+                        <m.icon className="w-4 h-4" /> {m.label}
+                      </button>
+                    ))}
+                  </div>
+                  <button aria-label="Ver historial" onClick={() => setShowHistory(true)} className={`flex items-center justify-center w-12 py-2.5 ml-1.5 rounded-xl text-slate-400 hover:text-white hover:bg-white/5 transition-all duration-300 ${showHistory ? 'bg-white/10 text-white shadow-lg' : ''}`}>
+                    <BarChart className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="w-full flex justify-between items-center h-6 mb-4 z-10 px-2">
+                 {mode === 'TABATA' ? (
+                    <div className="flex items-center gap-2 w-full justify-center">
+                      {Array.from({length: tabataRounds}).map((_, i) => (
+                        <div key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i + 1 < uiRound ? 'bg-fuchsia-500 w-4' : i + 1 === uiRound ? 'bg-white w-6 shadow-[0_0_10px_rgba(255,255,255,0.8)]' : 'bg-white/10 w-3'}`} />
+                      ))}
+                    </div>
+                 ) : mode === 'RND' ? (
+                    <div className="flex items-center gap-2 text-sm font-semibold text-rose-300/80 bg-rose-500/10 px-4 py-1.5 rounded-full w-full justify-center">
+                      <BellRing className="w-4 h-4 animate-pulse" /> {alertsPlayed} / {alertCount} Alertas
+                    </div>
+                 ) : <div className="w-full flex justify-center"><div className="text-blue-300/80 text-sm font-semibold uppercase tracking-widest bg-blue-500/10 px-4 py-1.5 rounded-full">Temporizador</div></div>}
+              </div>
+
+              <TimerDisplay ref={timerDisplayRef} uiPhase={uiPhase} mode={mode} isPaused={isPaused} targetTimeRef={targetTimeRef} getInitialTimeForMode={getInitialTimeForMode} />
+
+              <div className="flex justify-center gap-4 w-full z-20">
+                {!isRunning ? (
+                  <button aria-label="Iniciar temporizador" onClick={startTimer} disabled={isTimeZero} className={`flex-1 font-black py-4 sm:py-5 px-6 rounded-2xl flex items-center justify-center gap-2 transition-all duration-200 shadow-xl text-lg tracking-wide active:scale-95 ${getStartBtnColor()} ${activeBtn === 'play' ? 'scale-95 opacity-80' : ''}`}>
+                    <Play className="w-6 h-6" fill="currentColor" /> {isPaused ? 'REANUDAR' : 'INICIAR'}
+                  </button>
+                ) : (
+                  <button aria-label="Pausar temporizador" onClick={pauseTimer} className={`flex-1 bg-white/10 hover:bg-white/20 text-white backdrop-blur-md border border-white/20 font-black py-4 sm:py-5 px-6 rounded-2xl flex items-center justify-center gap-2 transition-all duration-200 active:scale-95 shadow-xl text-lg tracking-wide ${activeBtn === 'pause' ? 'scale-95 bg-white/30' : ''}`}>
+                    <Pause className="w-6 h-6" fill="currentColor" /> PAUSAR
+                  </button>
+                )}
+                <button aria-label="Reiniciar temporizador" onClick={resetTimer} disabled={!isRunning && !isPaused && uiPhase !== 'FINISHED'} className={`p-4 sm:p-5 rounded-2xl flex items-center justify-center transition-all duration-200 border border-white/10 backdrop-blur-md shadow-xl ${(!isRunning && !isPaused && uiPhase !== 'FINISHED') ? 'bg-white/5 text-white/20 cursor-not-allowed' : 'bg-white/10 hover:bg-white/20 text-white active:scale-95'} ${activeBtn === 'reset' ? 'scale-95 bg-white/30' : ''}`}>
+                  <RotateCcw className="w-6 h-6" />
+                </button>
+              </div>
+            </div>
+
+            <div className={`transition-all duration-500 ease-in-out origin-top ${isRunning && !isPaused ? 'opacity-0 scale-y-0 h-0 pointer-events-none' : 'opacity-100 scale-y-100'}`}>
+              <div className="bg-slate-900/60 backdrop-blur-xl rounded-[2rem] border border-white/10 overflow-hidden shadow-[0_8px_32px_0_rgba(0,0,0,0.3)]">
+                <button aria-expanded={showSettings} onClick={() => setShowSettings(!showSettings)} className="w-full flex items-center justify-between p-5 text-white/70 hover:text-white transition-colors">
+                  <span className="flex items-center gap-2 font-semibold text-sm uppercase tracking-wider"><Settings className="w-4 h-4" /> Configuración</span>
+                  {showSettings ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+                </button>
+                
+                <div className={`transition-all duration-300 ease-in-out px-6 ${showSettings ? 'pb-6 max-h-[500px] opacity-100' : 'max-h-0 opacity-0 pb-0 overflow-hidden'}`}>
+                  <div className="space-y-6 pt-2 border-t border-white/5">
+                    
+                    {mode === 'RND' && (
+                      <div className="space-y-5 animate-in fade-in slide-in-from-top-4 duration-500">
+                        <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-3">Tiempo Total (Minutos)</label>
+                          <div className="flex gap-2">
+                            {[1, 2, 3, 5, 10].map(mins => (
+                              <button key={mins} onClick={() => setPresetMinutes(mins)} className={`flex-1 py-3 rounded-xl font-bold transition-all duration-200 ${presetMinutes === mins ? 'bg-rose-500 text-white shadow-lg shadow-rose-500/30' : 'bg-white/5 text-slate-300 hover:bg-white/10 border border-white/5'}`}>
+                                {mins}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold text-slate-400 uppercase tracking-wider flex justify-between mb-3">
+                            Pitidos Aleatorios
+                          </label>
+                          <div className="flex items-center gap-3">
+                            <button aria-label="Menos alertas" onClick={() => setAlertCount(Math.max(5, alertCount - 5))} className="p-4 bg-white/5 rounded-2xl hover:bg-white/20 active:scale-95 text-white/70 transition-colors"><Minus className="w-6 h-6"/></button>
+                            <div className="flex-1 flex flex-col items-center">
+                              <span className="text-white text-xl font-black bg-rose-500/20 px-6 py-2 rounded-full mb-1">{alertCount}</span>
+                              <span className="text-[10px] text-rose-300/80 uppercase tracking-wider flex items-center gap-1 mt-1"><Info className="w-3 h-3"/> ~1 alerta cada {rndDensity}s</span>
+                            </div>
+                            <button aria-label="Más alertas" onClick={() => setAlertCount(Math.min(50, alertCount + 5))} className="p-4 bg-white/5 rounded-2xl hover:bg-white/20 active:scale-95 text-white/70 transition-colors"><Plus className="w-6 h-6"/></button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {mode === 'TABATA' && (
+                      <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-500">
+                        <div className="grid grid-cols-3 gap-3 h-36">
+                          <BigNumberInput label="Trabajo" value={tabataWork} onChange={setTabataWork} color="text-fuchsia-400" min={1} />
+                          <BigNumberInput label="Descanso" value={tabataRest} onChange={setTabataRest} color="text-cyan-400" min={0} />
+                          <BigNumberInput label="Rondas" value={tabataRounds} onChange={setTabataRounds} color="text-amber-400" min={1} />
+                        </div>
+                        <div className="flex justify-center mt-4">
+                           <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider bg-white/5 px-4 py-1.5 rounded-full flex items-center gap-2">
+                             <Timer className="w-3 h-3"/> Duración Total: <span className="text-white">{tabataTotalDisplay}</span>
+                           </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {mode === 'BASIC' && (
+                       <div className="flex justify-center items-center gap-4 py-2 animate-in fade-in slide-in-from-top-4 duration-500 h-36">
+                         <div className="flex-1 h-full">
+                           <BigNumberInput label="Minutos" value={basicMin} onChange={setBasicMin} color="text-blue-400" min={0} max={99} />
+                         </div>
+                         <div className="text-4xl font-black text-slate-600 mb-2">:</div>
+                         <div className="flex-1 h-full">
+                           <BigNumberInput label="Segundos" value={basicSec} onChange={setBasicSec} color="text-blue-400" min={0} max={59} />
+                         </div>
+                       </div>
+                    )}
+
+                    <div className="flex justify-between items-center pt-4 border-t border-white/5">
+                      <div className="flex items-center gap-2 text-xs text-slate-400 font-semibold uppercase tracking-wider">
+                        <Smartphone className="w-4 h-4" /> Pantalla siempre activa
+                      </div>
+                      <button aria-label="Activar o desactivar voz" onClick={() => setVoiceEnabled(!voiceEnabled)} className={`p-3 rounded-xl transition-all duration-300 ${voiceEnabled ? 'bg-emerald-500/20 text-emerald-400 shadow-[0_0_15px_rgba(52,211,153,0.2)]' : 'bg-white/5 text-slate-500 hover:bg-white/10'}`} title="Asistente de Voz">
+                        {voiceEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
+                      </button>
+                    </div>
+
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+
+  <script>
+    // Registro del Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+          .then(registration => {
+            console.log('ServiceWorker registrado con éxito:', registration.scope);
+          })
+          .catch(error => {
+            console.log('Error al registrar el ServiceWorker:', error);
+          });
+      });
+    }
+  </script>
+</body>
+</html>
