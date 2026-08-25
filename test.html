@@ -1,33 +1,44 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-</head>
-<body>
-  <div id="root"></div>
-  <script>
-    if (typeof Babel !== 'undefined') {
-      Babel.registerPreset('my-react', {
-        presets: [
-          [Babel.availablePresets['react'], { runtime: 'classic', throwIfNamespace: false }]
-        ]
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Prueba local · Timer Round</title>
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #090d1d; color: #f7f8ff; }
+      body { width: min(100% - 32px, 720px); margin: 32px auto; }
+      section { margin: 16px 0; padding: 18px; border: 1px solid #2a3457; border-radius: 16px; background: #121a33; }
+      h1, h2 { margin-top: 0; } p, li { color: #b7bfd7; line-height: 1.55; }
+      .ok { color: #52e0b1; } .fail { color: #ff91aa; } code { color: #8bd5ff; }
+      iframe { width: 100%; height: 720px; border: 1px solid #2a3457; border-radius: 16px; background: #090d1d; }
+    </style>
+  </head>
+  <body>
+    <h1>Prueba manual de Timer Round</h1>
+    <section>
+      <h2>Estado de archivos</h2>
+      <p id="result">Comprobando recursos…</p>
+    </section>
+    <section>
+      <h2>Checklist rápido</h2>
+      <ol>
+        <li>Probá iniciar, pausar, reanudar y reiniciar.</li>
+        <li>Comprobá la cuenta previa, señales aleatorias y el cambio trabajo/descanso de Tabata.</li>
+        <li>Terminá una sesión corta y revisá que aparezca en el historial.</li>
+        <li>Desconectá la red y recargá para verificar el modo offline, una vez que el service worker esté instalado.</li>
+      </ol>
+    </section>
+    <iframe title="Vista de prueba de Timer Round" src="index.html"></iframe>
+    <script src="test-babel.js"></script>
+    <script>
+      window.addEventListener('timer-round-smoke-complete', event => {
+        const failed = event.detail.filter(item => !item.ok);
+        const result = document.getElementById('result');
+        result.textContent = failed.length
+          ? `Fallaron: ${failed.map(item => item.asset).join(', ')}`
+          : `Todo listo: ${event.detail.length} recursos principales responden correctamente.`;
+        result.className = failed.length ? 'fail' : 'ok';
       });
-    }
-  </script>
-  <script type="text/babel" data-presets="my-react,env">
-    console.log("Testing");
-    const m = { icon: "span" };
-    function App() {
-      return (
-        <div>
-          <m.icon className="w-4 h-4" />
-        </div>
-      );
-    }
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
-  </script>
-</body>
+    </script>
+  </body>
 </html>

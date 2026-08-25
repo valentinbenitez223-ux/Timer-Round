@@ -1,42 +1,51 @@
-const CACHE_NAME = 'timer-round-v2';
-const CORE_ASSETS = [
+const CACHE_NAME = 'timer-round-v5';
+const APP_SHELL = [
   './',
   './index.html',
+  './app.js',
+  './styles.css',
   './manifest.json',
-  './icon-192.png'
+  './icon.svg'
 ];
 
 self.addEventListener('install', event => {
   self.skipWaiting();
-  // Pre-cargamos los archivos esenciales al instalar
-  event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => cache.addAll(CORE_ASSETS))
-  );
+  event.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(APP_SHELL)));
 });
 
 self.addEventListener('activate', event => {
   event.waitUntil(
-    caches.keys().then(cacheNames => {
-      return Promise.all(
-        cacheNames.map(cache => {
-          if (cache !== CACHE_NAME) return caches.delete(cache);
-        })
-      );
-    })
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
   );
-  self.clients.claim();
+});
+
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 self.addEventListener('fetch', event => {
+  if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin) return;
+
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then(response => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+          return response;
+        })
+        .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
   event.respondWith(
     fetch(event.request)
-      .then(networkResponse => {
-        // Guardamos dinámicamente la respuesta en caché para futuros usos offline
-        if (event.request.url.startsWith('http')) {
-          const responseClone = networkResponse.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, responseClone));
-        }
-        return networkResponse;
+      .then(response => {
+        if (response.ok) caches.open(CACHE_NAME).then(cache => cache.put(event.request, response.clone()));
+        return response;
       })
       .catch(() => caches.match(event.request))
   );
