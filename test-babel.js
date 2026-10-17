@@ -47,18 +47,18 @@
 
     const sanitized = utils.sanitizeStoredData({
       activeMode: 'invalid-mode',
-      settings: { random: { minutes: '', alerts: 500 } },
-      preferences: { volume: null },
+      settings: { random: { minutes: '', alerts: 500, cueType: 'combat' } },
+      preferences: { volume: null, prepSeconds: 5 },
       history: [
-        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8 },
-        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8 },
+        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12 },
+        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12 },
         { id: 'bad-date', completedAt: 'fecha-invalida', mode: 'focus', durationMs: 5000 }
       ]
     });
 
     assert('sanitizeStoredData() corrige activeMode inválido', sanitized.activeMode === 'random');
-    assert('sanitizeStoredData() preserva volumen por defecto ante null', sanitized.preferences.volume === 70);
-    assert('sanitizeStoredData() deduplica historial y filtra fechas inválidas', sanitized.history.length === 1 && sanitized.history[0].id === 'dup-1');
+    assert('sanitizeStoredData() preserva volumen por defecto ante null y respeta cueType', sanitized.preferences.volume === 70 && sanitized.settings.random.cueType === 'combat');
+    assert('sanitizeStoredData() deduplica historial, conserva score y filtra fechas inválidas', sanitized.history.length === 1 && sanitized.history[0].score === 12);
 
     const tabataPlan = utils.getPlan('tabata', {
       random: { minutes: 1, alerts: 5 },
@@ -67,12 +67,38 @@
     });
     assert('getPlan("tabata") calcula duración exacta (8×20s + 7×10s = 230s)', tabataPlan.durationMs === 230000);
 
+    const multiRandomPlan = utils.getPlan('random', {
+      random: { minutes: 2, alerts: 12, rounds: 3, rest: 60, cueType: 'combat' }
+    });
+    assert('getPlan("random") multi-round calcula trabajo + descansos (3×120s + 2×60s = 480s)', multiRandomPlan.durationMs === 480000 && multiRandomPlan.rounds === 3);
+
+    const emomPlan = utils.getPlan('emom', {
+      emom: { interval: 45, rounds: 8 }
+    });
+    assert('getPlan("emom") calcula duración total (8×45s = 360s)', emomPlan.durationMs === 360000 && emomPlan.workMs === 45000);
+
     const schedule = utils.createRandomSchedule(60000, 15);
     const isSortedAndSpaced = schedule.every((val, i) => i === 0 || val >= schedule[i - 1] + 200);
     assert('createRandomSchedule() genera señales ordenadas y con separación mínima', schedule.length === 15 && isSortedAndSpaced);
 
+    const streak = utils.calculateStreakDays([
+      { completedAt: new Date().toISOString() },
+      { completedAt: new Date(Date.now() - 86400000).toISOString() }
+    ]);
+    assert('calculateStreakDays() contabiliza días consecutivos correctamente', streak === 2);
+
     assert('formatTime() formatea correctamente mm:ss', utils.formatTime(65000) === '01:05' && utils.formatTime(0) === '00:00');
+
     assert('Módulo de audio expuesto y preparado en TimerRound', Boolean(target.api.audio && typeof target.api.audio.playCue === 'function'));
+
+    assert('Generador táctico de Karate incluye combinaciones de point-fighting y desplazamientos', 
+      Array.isArray(utils.KARATE_COMBINATIONS) && 
+      utils.KARATE_COMBINATIONS.includes('Kizami - Gyaku') &&
+      Array.isArray(utils.KARATE_DISPLACEMENTS) &&
+      utils.KARATE_DISPLACEMENTS.includes('Salida lateral en ángulo') &&
+      typeof utils.generateKarateCallout === 'function' &&
+      typeof utils.generateKarateCallout() === 'string'
+    );
   } else {
     assert('Motor TimerRound accesible en vista de prueba', false, 'No se encontró window.TimerRound');
   }

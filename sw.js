@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timer-round-v8';
+const CACHE_NAME = 'timer-round-v10';
 const APP_SHELL = [
   './',
   './index.html',

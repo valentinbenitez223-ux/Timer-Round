@@ -3,12 +3,56 @@
 
   const STORAGE_KEY = 'timer-round:v4';
   const CIRCUMFERENCE = 2 * Math.PI * 120;
+  const VALID_MODES = ['random', 'tabata', 'emom', 'focus'];
+  const VALID_CUE_TYPES = ['pip', 'numbers', 'combat'];
+  const KARATE_COMBINATIONS = [
+    'Kizami - Gyaku',
+    'Finta y Gyaku',
+    'Gyaku tsuki al cuerpo',
+    'Anticipación y Uraken',
+    'Doble kizami',
+    'Kizami y barrida',
+    'Mawashi chudan',
+    'Uraken y Gyaku'
+  ];
+
+  const KARATE_DISPLACEMENTS = [
+    'Salida lateral en ángulo',
+    'Paso diagonal y contra',
+    'Esquiva y entrada',
+    'Desplazamiento atrás y finta',
+    'Pivoteo y Uraken',
+    'Cambio de guardia y ataque',
+    'Ruptura de distancia y contra'
+  ];
+
+  const TACTICAL_ACTIONS = [
+    '¡Entrada rápida!',
+    '¡Anticipá!',
+    '¡Contraataque!',
+    '¡Defensa y salida!',
+    '¡Presión y remate!',
+    '¡Finta!'
+  ];
+
+  const COMBAT_CALLOUTS = [
+    ...KARATE_COMBINATIONS,
+    ...KARATE_DISPLACEMENTS,
+    ...TACTICAL_ACTIONS
+  ];
+
+  function generateKarateCallout() {
+    return COMBAT_CALLOUTS[Math.floor(Math.random() * COMBAT_CALLOUTS.length)];
+  }
+  const NUMBER_CALLOUTS = ['Uno', 'Dos', 'Tres', 'Cuatro'];
+
   const feedbackTimers = new Set();
   const activeOscillators = new Set();
   let app = document.getElementById('app');
   let animationFrame = 0;
   let wakeLock = null;
   let audioContext = null;
+  let audioUnlocked = false;
   let toastTimer = 0;
   let alertFlashTimer = 0;
   let lastFocusedElement = null;
@@ -17,24 +61,47 @@
   const defaults = {
     activeMode: 'random',
     settings: {
-      random: { minutes: 1, alerts: 10 },
+      random: { minutes: 1, alerts: 10, rounds: 1, rest: 30, cueType: 'pip' },
       tabata: { work: 20, rest: 10, rounds: 8 },
+      emom: { interval: 60, rounds: 10 },
       focus: { minutes: 5, seconds: 0 }
     },
-    preferences: { sound: true, voice: true, vibration: true, preparation: true, volume: 70 },
+    preferences: {
+      sound: true,
+      voice: true,
+      vibration: true,
+      preparation: true,
+      prepSeconds: 3,
+      volume: 70
+    },
+    Presets: [],
+    savedRoutines: [],
     history: []
   };
 
   const FIELD_RANGES = {
     'random.minutes': [1, 120],
     'random.alerts': [1, 60],
+    'random.rounds': [1, 60],
+    'random.rest': [0, 600],
     'tabata.work': [1, 600],
     'tabata.rest': [0, 600],
     'tabata.rounds': [1, 60],
+    'emom.interval': [10, 600],
+    'emom.rounds': [1, 60],
     'focus.minutes': [0, 99],
     'focus.seconds': [0, 59],
-    'preferences.volume': [0, 100]
+    'preferences.volume': [0, 100],
+    'preferences.prepSeconds': [3, 15]
   };
+
+  const RANDOM_PRESETS = [
+    { label: '1 min · 10 pips', minutes: 1, alerts: 10, rounds: 1, rest: 30 },
+    { label: '2 min · 15 pips', minutes: 2, alerts: 15, rounds: 1, rest: 30 },
+    { label: 'Point Fight 2m×3', minutes: 2, alerts: 12, rounds: 3, rest: 60 },
+    { label: 'Full Contact 3m×3', minutes: 3, alerts: 18, rounds: 3, rest: 60 },
+    { label: 'Reacción 1m×5', minutes: 1, alerts: 12, rounds: 5, rest: 30 }
+  ];
 
   const TABATA_PRESETS = [
     { label: 'Clásico 20/10×8', work: 20, rest: 10, rounds: 8 },
@@ -43,12 +110,19 @@
     { label: 'Sprint 15/15×10', work: 15, rest: 15, rounds: 10 }
   ];
 
+  const EMOM_PRESETS = [
+    { label: 'EMOM 60s×10', interval: 60, rounds: 10 },
+    { label: 'EMOM 45s×8', interval: 45, rounds: 8 },
+    { label: 'E2MOM 120s×5', interval: 120, rounds: 5 },
+    { label: 'Explosivo 30s×12', interval: 30, rounds: 12 }
+  ];
+
   const FOCUS_PRESETS = [
     { label: '1 min', minutes: 1, seconds: 0 },
     { label: '3 min', minutes: 3, seconds: 0 },
     { label: '5 min', minutes: 5, seconds: 0 },
-    { label: '10 min', minutes: 10, seconds: 0 },
-    { label: '15 min', minutes: 15, seconds: 0 }
+    { label: '15 min', minutes: 15, seconds: 0 },
+    { label: '25 min', minutes: 25, seconds: 0 }
   ];
 
   function number(value, min, max, fallback) {
@@ -63,19 +137,19 @@
   }
 
   function migrateHistoryItem(item) {
-    const modes = { RND: 'random', TABATA: 'tabata', BASIC: 'focus' };
+    const modes = { RND: 'random', TABATA: 'tabata', EMOM: 'emom', BASIC: 'focus' };
     return {
       id: String((item && item.id) || `${Date.now()}-${Math.random().toString(16).slice(2)}`),
       completedAt: (item && item.date) || new Date().toISOString(),
       mode: modes[item && item.mode] || 'focus',
       durationMs: number(item && item.totalTimeMs, 1000, 86400000, 60000),
-      rounds: number(item && item.rounds, 1, 60, 1)
+      rounds: number(item && item.rounds, 1, 60, 1),
+      score: number(item && item.score, 0, 9999, 0)
     };
   }
 
   function sanitizeHistoryList(rawHistory) {
     if (!Array.isArray(rawHistory)) return [];
-    const validModes = ['random', 'tabata', 'focus'];
     const seenIds = new Set();
     const sanitized = [];
 
@@ -90,11 +164,30 @@
       sanitized.push({
         id,
         completedAt: new Date(timestamp).toISOString(),
-        mode: validModes.includes(item.mode) ? item.mode : 'focus',
+        mode: VALID_MODES.includes(item.mode) ? item.mode : 'focus',
         durationMs: number(item.durationMs !== undefined ? item.durationMs : item.totalTimeMs, 1000, 86400000, 60000),
-        rounds: number(item.rounds, 1, 60, 1)
+        rounds: number(item.rounds, 1, 60, 1),
+        score: number(item.score, 0, 9999, 0)
       });
-      if (sanitized.length >= 80) break;
+      if (sanitized.length >= 100) break;
+    }
+    return sanitized;
+  }
+
+  function sanitizeRoutineList(rawRoutines) {
+    if (!Array.isArray(rawRoutines)) return [];
+    const sanitized = [];
+    for (const item of rawRoutines) {
+      if (!item || typeof item !== 'object') continue;
+      const name = String(item.name || '').trim().slice(0, 32);
+      if (!name || !VALID_MODES.includes(item.mode)) continue;
+      sanitized.push({
+        id: String(item.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`),
+        name,
+        mode: item.mode,
+        config: item.config && typeof item.config === 'object' ? item.config : {}
+      });
+      if (sanitized.length >= 12) break;
     }
     return sanitized;
   }
@@ -103,21 +196,28 @@
     const safeRaw = raw && typeof raw === 'object' ? raw : {};
     const random = (safeRaw.settings && safeRaw.settings.random) || {};
     const tabata = (safeRaw.settings && safeRaw.settings.tabata) || {};
+    const emom = (safeRaw.settings && safeRaw.settings.emom) || {};
     const focus = (safeRaw.settings && safeRaw.settings.focus) || {};
     const prefs = safeRaw.preferences || {};
-    const validModes = ['random', 'tabata', 'focus'];
 
     return {
-      activeMode: validModes.includes(safeRaw.activeMode) ? safeRaw.activeMode : defaults.activeMode,
+      activeMode: VALID_MODES.includes(safeRaw.activeMode) ? safeRaw.activeMode : defaults.activeMode,
       settings: {
         random: {
           minutes: number(random.minutes !== undefined ? random.minutes : safeRaw.timer_rnd_min, 1, 120, defaults.settings.random.minutes),
-          alerts: number(random.alerts !== undefined ? random.alerts : safeRaw.timer_rnd_alerts, 1, 60, defaults.settings.random.alerts)
+          alerts: number(random.alerts !== undefined ? random.alerts : safeRaw.timer_rnd_alerts, 1, 60, defaults.settings.random.alerts),
+          rounds: number(random.rounds, 1, 60, defaults.settings.random.rounds),
+          rest: number(random.rest, 0, 600, defaults.settings.random.rest),
+          cueType: VALID_CUE_TYPES.includes(random.cueType) ? random.cueType : defaults.settings.random.cueType
         },
         tabata: {
           work: number(tabata.work !== undefined ? tabata.work : safeRaw.timer_tabata_work, 1, 600, defaults.settings.tabata.work),
           rest: number(tabata.rest !== undefined ? tabata.rest : safeRaw.timer_tabata_rest, 0, 600, defaults.settings.tabata.rest),
           rounds: number(tabata.rounds !== undefined ? tabata.rounds : safeRaw.timer_tabata_rounds, 1, 60, defaults.settings.tabata.rounds)
+        },
+        emom: {
+          interval: number(emom.interval, 10, 600, defaults.settings.emom.interval),
+          rounds: number(emom.rounds, 1, 60, defaults.settings.emom.rounds)
         },
         focus: {
           minutes: number(focus.minutes !== undefined ? focus.minutes : safeRaw.timer_basic_min, 0, 99, defaults.settings.focus.minutes),
@@ -129,8 +229,10 @@
         voice: typeof prefs.voice === 'boolean' ? prefs.voice : defaults.preferences.voice,
         vibration: typeof prefs.vibration === 'boolean' ? prefs.vibration : defaults.preferences.vibration,
         preparation: typeof prefs.preparation === 'boolean' ? prefs.preparation : defaults.preferences.preparation,
+        prepSeconds: number(prefs.prepSeconds, 3, 15, defaults.preferences.prepSeconds),
         volume: number(prefs.volume, 0, 100, defaults.preferences.volume)
       },
+      savedRoutines: sanitizeRoutineList(safeRaw.savedRoutines),
       history: sanitizeHistoryList(safeRaw.history)
     };
   }
@@ -152,37 +254,64 @@
     ui: {
       settingsOpen: false,
       historyOpen: false,
+      historyFilter: 'all',
       confirmClearHistory: false,
+      routineNameDraft: '',
       installAvailable: Boolean(window.deferredInstallPrompt),
       alertFlash: false,
+      lastCallout: '',
       toast: { visible: false, message: '', kind: 'success' }
     },
     session: null
   };
 
   function getPlan(mode = state.activeMode, settings = state.settings) {
-    const { random, tabata, focus } = settings;
+    const random = (settings && settings.random) || defaults.settings.random;
+    const tabata = (settings && settings.tabata) || defaults.settings.tabata;
+    const emom = (settings && settings.emom) || defaults.settings.emom;
+    const focus = (settings && settings.focus) || defaults.settings.focus;
+
     if (mode === 'tabata') {
       const durationMs = (tabata.work * tabata.rounds + tabata.rest * Math.max(0, tabata.rounds - 1)) * 1000;
       return { mode, durationMs, workMs: tabata.work * 1000, restMs: tabata.rest * 1000, rounds: tabata.rounds, alerts: 0 };
     }
+    if (mode === 'emom') {
+      const workMs = emom.interval * 1000;
+      const rounds = emom.rounds;
+      return { mode, durationMs: workMs * rounds, workMs, restMs: 0, rounds, alerts: 0 };
+    }
     if (mode === 'focus') {
       const durationMs = (focus.minutes * 60 + focus.seconds) * 1000;
-      return { mode, durationMs, rounds: 1, alerts: 0 };
+      return { mode, durationMs, workMs: durationMs, restMs: 0, rounds: 1, alerts: 0 };
     }
-    return { mode: 'random', durationMs: random.minutes * 60000, rounds: 1, alerts: random.alerts };
+    const workMs = random.minutes * 60000;
+    const rounds = number(random.rounds, 1, 60, 1);
+    const restSec = number(random.rest, 0, 600, 0);
+    const restMs = rounds > 1 ? restSec * 1000 : 0;
+    const durationMs = workMs * rounds + restMs * Math.max(0, rounds - 1);
+    return {
+      mode: 'random',
+      durationMs,
+      workMs,
+      restMs,
+      rounds,
+      alerts: random.alerts,
+      cueType: VALID_CUE_TYPES.includes(random.cueType) ? random.cueType : 'pip'
+    };
   }
 
   function createIdleSession(mode = state.activeMode) {
     const plan = getPlan(mode);
+    const initialDisplayMs = plan.rounds > 1 ? plan.workMs : plan.durationMs;
     return {
       running: false,
       paused: false,
       phase: 'idle',
       plan,
       round: 1,
-      durationMs: plan.durationMs,
-      remainingMs: plan.durationMs,
+      score: 0,
+      durationMs: initialDisplayMs,
+      remainingMs: initialDisplayMs,
       phaseStartedAt: 0,
       endAt: 0,
       startedAt: 0,
@@ -198,8 +327,14 @@
 
   function persist() {
     try {
-      const { activeMode, settings, preferences, history } = state;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ activeMode, settings, preferences, history }));
+      const { activeMode, settings, preferences, savedRoutines, history } = state;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({
+        activeMode,
+        settings,
+        preferences,
+        savedRoutines,
+        history
+      }));
     } catch (_) {
       showToast('No se pudieron guardar los cambios en este navegador.', 'warning');
     }
@@ -220,7 +355,44 @@
   }
 
   function modeLabel(mode) {
-    return ({ random: 'Round aleatorio', tabata: 'Tabata', focus: 'Cuenta regresiva' })[mode] || 'Temporizador';
+    return ({
+      random: 'Round aleatorio',
+      tabata: 'Tabata',
+      emom: 'EMOM',
+      focus: 'Cuenta regresiva'
+    })[mode] || 'Temporizador';
+  }
+
+  function cueTypeLabel(cueType) {
+    return ({
+      pip: 'Pip de reacción',
+      numbers: 'Combos (1–4)',
+      combat: 'Táctico (Karate / Combate)'
+    })[cueType] || 'Pip de reacción';
+  }
+
+  function calculateStreakDays(history = state.history) {
+    if (!history.length) return 0;
+    const daySet = new Set(
+      history.map(item => {
+        const d = new Date(item.completedAt);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      })
+    );
+    const cursor = new Date();
+    cursor.setHours(0, 0, 0, 0);
+    const todayKey = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+    if (!daySet.has(todayKey)) {
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    let streak = 0;
+    while (true) {
+      const key = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}-${String(cursor.getDate()).padStart(2, '0')}`;
+      if (!daySet.has(key)) break;
+      streak += 1;
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    return streak;
   }
 
   function icon(name) {
@@ -230,6 +402,9 @@
       pause: '<path d="M8 5.5v13M16 5.5v13"/>',
       reset: '<path d="M4.5 11a7.5 7.5 0 1 1 1.7 5.1"/><path d="M4.5 5.5V11H10"/>',
       skip: '<path d="m5.5 6 8.5 6-8.5 6z" fill="currentColor" stroke="none"/><path d="M18 6v12"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      bookmark: '<path d="M6 4.5h12a1 1 0 0 1 1 1v14l-7-4-7 4v-14a1 1 0 0 1 1-1z"/>',
+      trash: '<path d="M4.5 7h15M9.5 7V4.5h5V7M7.5 7l.8 12.5h7.4L16.5 7"/>',
       history: '<path d="M4.5 12a7.5 7.5 0 1 0 2.1-5.2"/><path d="M4.5 5.5V11H10"/><path d="M12 8v4l2.8 1.8"/>',
       fullscreen: '<path d="M8.5 4.5h-4v4M15.5 4.5h4v4M19.5 15.5v4h-4M4.5 15.5v4h4"/>',
       install: '<path d="M12 3v11"/><path d="m8 10 4 4 4-4"/><path d="M5 20h14"/>',
@@ -246,9 +421,17 @@
     if (session.phase === 'finished') return { label: 'Sesión completada', detail: 'Excelente trabajo. Tu sesión quedó guardada.' };
     if (session.paused) return { label: 'Pausado', detail: 'El tiempo quedó exactamente donde lo dejaste.' };
     if (session.phase === 'work') {
-      if (state.ui.alertFlash) return { label: '¡Señal!', detail: 'Cambiá de ritmo o ejecutá la combinación.' };
+      if (state.ui.alertFlash) {
+        return {
+          label: state.ui.lastCallout || '¡Señal!',
+          detail: 'Reaccioná al estímulo con máxima velocidad.'
+        };
+      }
+      if (session.plan.mode === 'emom') {
+        return { label: `Minuto ${session.round}`, detail: 'Completá la serie y usá el resto del bloque para recuperar.' };
+      }
       return {
-        label: session.plan.mode === 'tabata' ? 'Trabajo' : 'En marcha',
+        label: session.plan.rounds > 1 ? `Ronda ${session.round}` : 'En marcha',
         detail: 'Mantené el ritmo y seguí las señales.'
       };
     }
@@ -266,23 +449,35 @@
     return Math.min(1, Math.max(0, 1 - session.remainingMs / session.durationMs));
   }
 
-  function getTabataTotalRemainingMs(session = state.session) {
-    if (session.plan.mode !== 'tabata') return session.remainingMs;
-    if (session.phase === 'idle') return session.plan.durationMs;
+  function getTotalRemainingMs(session = state.session) {
+    if (session.plan.rounds <= 1) return session.remainingMs;
+    if (session.phase === 'idle' || session.phase === 'prep') return session.plan.durationMs;
     if (session.phase === 'finished') return 0;
-    if (session.phase === 'prep') return session.plan.durationMs;
 
     const futureRounds = Math.max(0, session.plan.rounds - session.round);
+    const workMs = session.plan.workMs || session.durationMs;
+    const restMs = session.plan.restMs || 0;
+
     if (session.phase === 'work') {
-      const restAfterCurrent = session.round < session.plan.rounds ? session.plan.restMs : 0;
-      const futureWorkAndRest = futureRounds * session.plan.workMs + Math.max(0, futureRounds - 1) * session.plan.restMs;
+      const restAfterCurrent = session.round < session.plan.rounds ? restMs : 0;
+      const futureWorkAndRest = futureRounds * workMs + Math.max(0, futureRounds - 1) * restMs;
       return session.remainingMs + restAfterCurrent + futureWorkAndRest;
     }
     if (session.phase === 'rest') {
-      const futureWorkAndRest = futureRounds * session.plan.workMs + Math.max(0, futureRounds - 1) * session.plan.restMs;
+      const futureWorkAndRest = futureRounds * workMs + Math.max(0, futureRounds - 1) * restMs;
       return session.remainingMs + futureWorkAndRest;
     }
     return session.remainingMs;
+  }
+
+  function updateDocumentTitle(s = state.session) {
+    if (typeof document === 'undefined') return;
+    if (s.running || s.paused) {
+      const copy = getPhaseCopy(s);
+      document.title = `(${displayValue(s)}) ${copy.label} · Timer Round`;
+    } else {
+      document.title = 'Timer Round';
+    }
   }
 
   function canReset(s) {
@@ -292,7 +487,7 @@
   function canSkipPhase(s) {
     if (!s.running && !s.paused) return false;
     if (s.phase === 'prep') return true;
-    return s.plan.mode === 'tabata' && (s.phase === 'work' || s.phase === 'rest');
+    return s.plan.rounds > 1 && (s.phase === 'work' || s.phase === 'rest');
   }
 
   function render() {
@@ -302,9 +497,10 @@
     const theme = s.paused ? 'paused' : ['prep', 'rest', 'finished'].includes(s.phase) ? s.phase : s.plan.mode;
     const isRunning = s.running;
     const isLocked = s.running || s.paused;
-    const tabataPips = s.plan.mode === 'tabata' ? renderRoundPips(s.plan.rounds, s.round) : '';
+    const showPips = s.plan.rounds > 1 ? renderRoundPips(s.plan.rounds, s.round) : '';
     const actionText = isRunning ? 'Pausar' : s.paused ? 'Reanudar' : s.phase === 'finished' ? 'Empezar de nuevo' : 'Iniciar';
     const toast = state.ui.toast;
+    const showCounter = isRunning || s.paused || s.score > 0;
 
     app.setAttribute('aria-busy', 'false');
     app.innerHTML = `
@@ -328,6 +524,7 @@
         <div class="mode-tabs" aria-label="Tipo de entrenamiento" role="tablist">
           ${renderModeTab('random', 'Aleatorio', isLocked)}
           ${renderModeTab('tabata', 'Tabata', isLocked)}
+          ${renderModeTab('emom', 'EMOM', isLocked)}
           ${renderModeTab('focus', 'Tiempo', isLocked)}
         </div>
 
@@ -343,13 +540,22 @@
                 <circle class="timer-ring-progress" id="progressRing" cx="144" cy="144" r="120" stroke-dasharray="${CIRCUMFERENCE}" stroke-dashoffset="${CIRCUMFERENCE * (1 - progressFor(s))}"></circle>
               </svg>
               <div class="timer-core">
-                <div class="phase-kicker" id="phaseLabel" aria-live="polite">${phaseCopy.label}</div>
+                <div class="phase-kicker" id="phaseLabel" aria-live="polite">${escapeHtml(phaseCopy.label)}</div>
                 <div class="time-value ${s.phase === 'prep' ? 'countdown' : ''}" id="timeValue" aria-live="off">${displayValue(s)}</div>
-                <div class="phase-detail" id="phaseDetail">${phaseCopy.detail}</div>
+                <div class="phase-detail" id="phaseDetail">${escapeHtml(phaseCopy.detail)}</div>
               </div>
             </div>
           </div>
-          <div class="mode-summary" id="modeSummary">${modeSummaryMarkup(s, tabataPips)}</div>
+          <div class="mode-summary" id="modeSummary">${modeSummaryMarkup(s, showPips)}</div>
+          ${showCounter ? `
+            <div class="live-counter-row">
+              <button class="counter-pill" type="button" data-action="increment-score" title="Registrar serie, combo o punto (Tecla C)">
+                ${icon('plus')}
+                <span>Marcador / Series: <strong id="scoreValue">${s.score}</strong></span>
+              </button>
+              ${s.score > 0 ? `<button class="counter-reset" type="button" data-action="reset-score" aria-label="Reiniciar marcador">0</button>` : ''}
+            </div>
+          ` : ''}
           <div class="timer-controls">
             <button class="button button-primary" type="button" id="toggleButton" data-action="toggle">${isRunning ? icon('pause') : icon('play')}<span id="controlText">${actionText}</span></button>
             ${canSkipPhase(s) ? `<button class="button button-secondary" type="button" data-action="skip-phase" title="Saltar a la siguiente fase">${icon('skip')}<span>Saltar</span></button>` : ''}
@@ -382,8 +588,13 @@
   }
 
   function statusMarkup(s) {
-    if (s.plan.mode === 'tabata') return `Ronda <strong id="roundNumber">${s.round}/${s.plan.rounds}</strong>`;
-    if (s.plan.mode === 'random') return `Señales <strong id="alertsNumber">${s.alertsFired}/${s.alertSchedule.length || s.plan.alerts}</strong>`;
+    if (s.plan.mode === 'tabata' || s.plan.mode === 'emom') {
+      return `Ronda <strong id="roundNumber">${s.round}/${s.plan.rounds}</strong>`;
+    }
+    if (s.plan.mode === 'random') {
+      const roundPart = s.plan.rounds > 1 ? `R<strong id="roundNumber">${s.round}/${s.plan.rounds}</strong> · ` : '';
+      return `${roundPart}Señales <strong id="alertsNumber">${s.alertsFired}/${s.alertSchedule.length || s.plan.alerts}</strong>`;
+    }
     return `<strong>Cuenta regresiva</strong>`;
   }
 
@@ -397,14 +608,21 @@
     return `<span class="round-pips" aria-label="Ronda ${current} de ${rounds}">${pips}</span>${rounds > visible ? `<span>+${rounds - visible}</span>` : ''}`;
   }
 
-  function modeSummaryMarkup(s, tabataPips) {
+  function modeSummaryMarkup(s, showPips) {
+    const totalRem = getTotalRemainingMs(s);
+    const remainingChip = (s.running || s.paused) && s.plan.rounds > 1
+      ? ` · Total <strong id="totalRemainingValue">${formatTime(totalRem)}</strong>`
+      : '';
+
     if (s.plan.mode === 'tabata') {
-      const totalRem = getTabataTotalRemainingMs(s);
-      const totalText = (s.running || s.paused) ? ` · Restante <strong id="tabataTotalRemaining">${formatTime(totalRem)}</strong>` : '';
-      return `${tabataPips}<span>Trabajo ${state.settings.tabata.work}s · Descanso ${state.settings.tabata.rest}s${totalText}</span>`;
+      return `${showPips}<span>Trabajo ${state.settings.tabata.work}s · Descanso ${state.settings.tabata.rest}s${remainingChip}</span>`;
+    }
+    if (s.plan.mode === 'emom') {
+      return `${showPips}<span>Cada <strong>${state.settings.emom.interval}s</strong> · ${s.plan.rounds} rondas${remainingChip}</span>`;
     }
     if (s.plan.mode === 'random') {
-      return `<span>Duración <strong id="summaryDuration">${formatDuration(s.plan.durationMs)}</strong></span><span>·</span><span><strong id="summaryAlerts">${s.plan.alerts}</strong> señales al azar</span>`;
+      const cueCopy = s.plan.cueType !== 'pip' ? ` · ${cueTypeLabel(s.plan.cueType)}` : '';
+      return `${showPips}<span>Total <strong id="summaryDuration">${formatDuration(s.plan.durationMs)}</strong></span><span>·</span><span><strong id="summaryAlerts">${s.plan.alerts}</strong> señales/round${cueCopy}${remainingChip}</span>`;
     }
     return `<span>Duración <strong id="summaryDuration">${formatDuration(s.plan.durationMs)}</strong></span>`;
   }
@@ -415,8 +633,8 @@
       <section class="surface settings-card ${isOpen ? 'open' : ''}" aria-label="Configuración">
         <button class="settings-heading" type="button" data-action="toggle-settings" aria-expanded="${isOpen}" aria-controls="settingsBody">
           <span>
-            <span class="settings-title">Configuración</span>
-            <span class="settings-caption">${isPaused ? 'Sesión en pausa · podés ajustar señales y volumen' : 'Ajustá el tipo de sesión y las señales'}</span>
+            <span class="settings-title">Configuración y Rutinas</span>
+            <span class="settings-caption">${isPaused ? 'Sesión en pausa · podés ajustar señales y volumen' : 'Personalizá rondas, estímulos, rutinas y audio'}</span>
           </span>
           <i class="chevron" aria-hidden="true"></i>
         </button>
@@ -424,7 +642,9 @@
           ${isPaused ? '<p class="paused-notice">Reiniciá la sesión si querés modificar la duración o cambiar de modo.</p>' : ''}
           ${!isPaused && state.activeMode === 'random' ? renderRandomSettings() : ''}
           ${!isPaused && state.activeMode === 'tabata' ? renderTabataSettings() : ''}
+          ${!isPaused && state.activeMode === 'emom' ? renderEmomSettings() : ''}
           ${!isPaused && state.activeMode === 'focus' ? renderFocusSettings() : ''}
+          ${!isPaused ? renderSavedRoutinesSection() : ''}
           ${renderPreferences()}
         </div>
       </section>`;
@@ -432,15 +652,31 @@
 
   function renderRandomSettings() {
     const config = state.settings.random;
+    const total = getPlan('random').durationMs;
     return `<div class="settings-section">
-      <h2 class="section-title">Round aleatorio</h2>
-      <p class="section-help">Las señales se reparten durante el round con separación garantizada para que no anticipes el cambio.</p>
-      <div class="preset-grid" aria-label="Duración rápida">
-        ${[1, 2, 3, 5, 10].map(value => `<button class="preset-button ${config.minutes === value ? 'active' : ''}" type="button" data-action="random-preset" data-value="${value}">${value} min</button>`).join('')}
+      <h2 class="section-title">Round aleatorio y reacción</h2>
+      <p class="section-help">Señales con separación mínima garantizada. Duración total: <strong id="randomTotalPreview">${formatDuration(total)}</strong>.</p>
+      <div class="preset-grid preset-grid-wrap" aria-label="Preajustes de Round aleatorio">
+        ${RANDOM_PRESETS.map((p, idx) => {
+          const isCurrent = config.minutes === p.minutes && config.alerts === p.alerts && config.rounds === p.rounds && config.rest === p.rest;
+          return `<button class="preset-button ${isCurrent ? 'active' : ''}" type="button" data-action="random-preset" data-preset-index="${idx}">${p.label}</button>`;
+        }).join('')}
       </div>
-      <div class="config-grid" style="margin-top:14px">
-        ${numberField('Minutos', 'random.minutes', config.minutes, 1, 120, 'minutes')}
-        ${numberField('Señales', 'random.alerts', config.alerts, 1, 60, 'alerts')}
+      <div class="config-grid two-by-two" style="margin-top:14px">
+        ${numberField('Minutos / round', 'random.minutes', config.minutes, 1, 120, 'minutes')}
+        ${numberField('Señales / round', 'random.alerts', config.alerts, 1, 60, 'alerts')}
+        ${numberField('Rondas', 'random.rounds', config.rounds, 1, 60, 'random-rounds')}
+        ${numberField('Descanso (s)', 'random.rest', config.rest, 0, 600, 'random-rest')}
+      </div>
+      <div class="cue-type-block">
+        <span class="field-label">Tipo de estímulo en cada señal</span>
+        <div class="preset-grid three-cols" style="margin-top:7px">
+          ${VALID_CUE_TYPES.map(type => `
+            <button class="preset-button ${config.cueType === type ? 'active' : ''}" type="button" data-action="set-cue-type" data-cue-type="${type}">
+              ${cueTypeLabel(type)}
+            </button>
+          `).join('')}
+        </div>
       </div>
     </div>`;
   }
@@ -465,11 +701,30 @@
     </div>`;
   }
 
+  function renderEmomSettings() {
+    const config = state.settings.emom;
+    const total = getPlan('emom').durationMs;
+    return `<div class="settings-section">
+      <h2 class="section-title">EMOM (Cada minuto en el minuto)</h2>
+      <p class="section-help">Iniciá cada serie al sonar la campana; el tiempo que te sobre es tu descanso. Total: <strong id="emomTotalPreview">${formatDuration(total)}</strong>.</p>
+      <div class="preset-grid preset-grid-wrap" aria-label="Preajustes EMOM">
+        ${EMOM_PRESETS.map((p, idx) => {
+          const isCurrent = config.interval === p.interval && config.rounds === p.rounds;
+          return `<button class="preset-button ${isCurrent ? 'active' : ''}" type="button" data-action="emom-preset" data-preset-index="${idx}">${p.label}</button>`;
+        }).join('')}
+      </div>
+      <div class="config-grid" style="margin-top:14px">
+        ${numberField('Cada cuántos seg.', 'emom.interval', config.interval, 10, 600, 'emom-interval')}
+        ${numberField('Rondas totales', 'emom.rounds', config.rounds, 1, 60, 'emom-rounds')}
+      </div>
+    </div>`;
+  }
+
   function renderFocusSettings() {
     const config = state.settings.focus;
     return `<div class="settings-section">
       <h2 class="section-title">Cuenta regresiva</h2>
-      <p class="section-help">Ideal para series, pausas de recuperación o bloques de enfoque.</p>
+      <p class="section-help">Ideal para bloques de estudio, isométricos o pausas de recuperación.</p>
       <div class="preset-grid" aria-label="Duración rápida">
         ${FOCUS_PRESETS.map((p, idx) => {
           const isCurrent = config.minutes === p.minutes && config.seconds === p.seconds;
@@ -480,6 +735,31 @@
         ${numberField('Minutos', 'focus.minutes', config.minutes, 0, 99, 'focus-minutes')}
         ${numberField('Segundos', 'focus.seconds', config.seconds, 0, 59, 'focus-seconds')}
       </div>
+    </div>`;
+  }
+
+  function renderSavedRoutinesSection() {
+    const routines = state.savedRoutines;
+    return `<div class="settings-section">
+      <h2 class="section-title">Mis rutinas guardadas</h2>
+      <p class="section-help">Guardá la configuración actual para cargarla en un toque cuando quieras.</p>
+      <div class="routine-save-row">
+        <input class="text-input" id="routineNameInput" type="text" maxlength="32" placeholder="Ej: Kumite 2m×3, Pliometría, Pomodoro…" value="${escapeHtml(state.ui.routineNameDraft)}" aria-label="Nombre de la rutina">
+        <button class="button button-tertiary" type="button" data-action="save-routine">${icon('bookmark')}<span>Guardar actual</span></button>
+      </div>
+      ${routines.length ? `
+        <div class="routine-list">
+          ${routines.map(item => `
+            <div class="routine-chip">
+              <button class="routine-load" type="button" data-action="load-routine" data-routine-id="${escapeHtml(item.id)}">
+                <span class="routine-tag">${modeLabel(item.mode)}</span>
+                <span class="routine-name">${escapeHtml(item.name)}</span>
+              </button>
+              <button class="routine-delete" type="button" data-action="delete-routine" data-routine-id="${escapeHtml(item.id)}" aria-label="Eliminar rutina ${escapeHtml(item.name)}">${icon('close')}</button>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
     </div>`;
   }
 
@@ -499,10 +779,20 @@
     const prefs = state.preferences;
     return `<div class="settings-section">
       <h2 class="section-title">Señales y comodidad</h2>
-      <div class="switch-row">${switchCopy('Sonidos', 'Tonos al iniciar, cambiar de fase y finalizar', 'sound', prefs.sound)}</div>
-      <div class="switch-row">${switchCopy('Voz', 'Indicaciones breves en español', 'voice', prefs.voice)}</div>
+      <div class="switch-row">${switchCopy('Sonidos y tablilla (10s)', 'Campana, pips de reacción y clapper en los últimos 10s', 'sound', prefs.sound)}</div>
+      <div class="switch-row">${switchCopy('Voz', 'Indicaciones y estímulos tácticos en español', 'voice', prefs.voice)}</div>
       <div class="switch-row">${switchCopy('Vibración', 'Refuerzo háptico si tu dispositivo lo permite', 'vibration', prefs.vibration)}</div>
-      <div class="switch-row">${switchCopy('Cuenta previa', 'Tres segundos antes de comenzar', 'preparation', prefs.preparation)}</div>
+      <div class="switch-row">${switchCopy('Cuenta previa', 'Conteo regresivo antes de arrancar el primer round', 'preparation', prefs.preparation)}</div>
+      ${prefs.preparation ? `
+        <div class="prep-duration-row">
+          <span class="field-label">Segundos de preparación</span>
+          <div class="preset-grid three-cols" style="margin-top:6px">
+            ${[3, 5, 10].map(sec => `
+              <button class="preset-button ${prefs.prepSeconds === sec ? 'active' : ''}" type="button" data-action="set-prep-seconds" data-value="${sec}">${sec} s</button>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
       <div class="settings-section">
         <div class="setting-label"><span class="field-label">Volumen de señales</span><span class="range-value" id="volumeValue">${prefs.volume}%</span></div>
         <div class="range-row">
@@ -513,6 +803,7 @@
       <div class="settings-actions">
         <div class="shortcut-list">
           <span><kbd>Espacio</kbd> iniciar / pausar</span>
+          <span><kbd>C</kbd> +1 marcador</span>
           <span><kbd>R</kbd> reiniciar</span>
           <span><kbd>M</kbd> sonido</span>
           <span><kbd>F</kbd> pantalla completa</span>
@@ -527,35 +818,52 @@
 
   function renderHistoryModal() {
     const history = state.history;
+    const filter = state.ui.historyFilter;
+    const filtered = filter === 'all' ? history : history.filter(item => item.mode === filter);
     const total = history.reduce((sum, item) => sum + item.durationMs, 0);
     const weekStart = new Date();
     weekStart.setHours(0, 0, 0, 0);
     weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
     const weekTotal = history.filter(item => new Date(item.completedAt) >= weekStart).reduce((sum, item) => sum + item.durationMs, 0);
+    const streakDays = calculateStreakDays(history);
     const confirming = state.ui.confirmClearHistory;
 
     return `<div class="modal-backdrop" data-action="close-history">
       <section class="history-modal" role="dialog" aria-modal="true" aria-labelledby="historyTitle" data-modal-content>
         <div class="history-heading">
           <div>
-            <h2 id="historyTitle">Tu historial</h2>
-            <p>Las sesiones se guardan en este dispositivo. Podés exportarlas o importarlas cuando quieras.</p>
+            <h2 id="historyTitle">Tu historial y progreso</h2>
+            <p>Las sesiones se guardan en este dispositivo. Podés filtrarlas o exportarlas en JSON.</p>
           </div>
           <button class="icon-button" type="button" id="closeHistoryButton" data-action="close-history" aria-label="Cerrar historial">${icon('close')}</button>
         </div>
-        <div class="history-stats">
+        <div class="history-stats four-stats">
           <div class="stat"><span class="stat-value">${history.length}</span><span class="stat-label">Sesiones</span></div>
+          <div class="stat"><span class="stat-value">${streakDays} ${streakDays === 1 ? 'día' : 'días'}</span><span class="stat-label">Racha actual</span></div>
           <div class="stat"><span class="stat-value">${formatDuration(weekTotal)}</span><span class="stat-label">Esta semana</span></div>
           <div class="stat"><span class="stat-value">${formatDuration(total)}</span><span class="stat-label">Acumulado</span></div>
         </div>
         <div class="history-tools">
-          <button class="button button-tertiary" type="button" data-action="export-history" ${history.length ? '' : 'disabled'}>${icon('download')}<span>Exportar JSON</span></button>
-          <label class="button button-tertiary file-button" tabindex="0">
-            ${icon('upload')}<span>Importar JSON</span>
-            <input type="file" id="importHistoryInput" accept="application/json,.json" class="hidden">
-          </label>
+          <div class="history-filters" role="group" aria-label="Filtrar por modo">
+            ${[
+              ['all', 'Todos'],
+              ['random', 'Aleatorio'],
+              ['tabata', 'Tabata'],
+              ['emom', 'EMOM'],
+              ['focus', 'Tiempo']
+            ].map(([key, label]) => `
+              <button class="filter-chip ${filter === key ? 'active' : ''}" type="button" data-action="filter-history" data-filter="${key}">${label}</button>
+            `).join('')}
+          </div>
+          <div class="history-io">
+            <button class="button button-tertiary" type="button" data-action="export-history" ${history.length ? '' : 'disabled'}>${icon('download')}<span>Exportar</span></button>
+            <label class="button button-tertiary file-button" tabindex="0">
+              ${icon('upload')}<span>Importar</span>
+              <input type="file" id="importHistoryInput" accept="application/json,.json" class="hidden">
+            </label>
+          </div>
         </div>
-        <div class="history-list">${history.length ? history.map(renderHistoryItem).join('') : '<p class="empty-history">Todavía no terminaste una sesión. Cuando completes una, aparecerá acá.</p>'}</div>
+        <div class="history-list">${filtered.length ? filtered.map(renderHistoryItem).join('') : '<p class="empty-history">No hay sesiones registradas en esta vista.</p>'}</div>
         <div class="modal-actions">
           ${confirming
             ? `<div class="confirm-inline">
@@ -571,13 +879,25 @@
   }
 
   function renderHistoryItem(item) {
-    const detail = item.mode === 'tabata' ? `${item.rounds} ${item.rounds === 1 ? 'ronda' : 'rondas'}` : modeLabel(item.mode);
+    const roundsInfo = item.rounds > 1 ? `${item.rounds} rondas` : modeLabel(item.mode);
+    const scoreInfo = item.score > 0 ? ` · ${item.score} pts/series` : '';
     const date = new Intl.DateTimeFormat('es-AR', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(item.completedAt));
-    return `<article class="history-item"><div><div class="history-mode">${modeLabel(item.mode)}</div><div class="history-date">${date}</div></div><div class="history-duration">${formatDuration(item.durationMs)}<span class="history-detail">${detail}</span></div></article>`;
+    return `
+      <article class="history-item">
+        <div>
+          <div class="history-mode">${modeLabel(item.mode)}</div>
+          <div class="history-date">${date}</div>
+        </div>
+        <div class="history-right">
+          <div class="history-duration">${formatDuration(item.durationMs)}<span class="history-detail">${roundsInfo}${scoreInfo}</span></div>
+          <button class="icon-button history-delete-btn" type="button" data-action="delete-history-item" data-history-id="${escapeHtml(item.id)}" title="Borrar esta sesión" aria-label="Borrar esta sesión">${icon('trash')}</button>
+        </div>
+      </article>`;
   }
 
   function updateLiveUi() {
     const s = state.session;
+    updateDocumentTitle(s);
     const time = document.getElementById('timeValue');
     const phase = document.getElementById('phaseLabel');
     const detail = document.getElementById('phaseDetail');
@@ -599,15 +919,21 @@
     if (alerts) alerts.textContent = `${s.alertsFired}/${s.alertSchedule.length || s.plan.alerts}`;
     const round = document.getElementById('roundNumber');
     if (round) round.textContent = `${s.round}/${s.plan.rounds}`;
-    const tabataTotal = document.getElementById('tabataTotalRemaining');
-    if (tabataTotal) tabataTotal.textContent = formatTime(getTabataTotalRemainingMs(s));
+    const totalRemNode = document.getElementById('totalRemainingValue');
+    if (totalRemNode) totalRemNode.textContent = formatTime(getTotalRemainingMs(s));
+    const scoreNode = document.getElementById('scoreValue');
+    if (scoreNode) scoreNode.textContent = String(s.score);
 
     const summaryDuration = document.getElementById('summaryDuration');
     if (summaryDuration) summaryDuration.textContent = formatDuration(s.plan.durationMs);
     const summaryAlerts = document.getElementById('summaryAlerts');
     if (summaryAlerts) summaryAlerts.textContent = String(s.plan.alerts);
+    const randomPreview = document.getElementById('randomTotalPreview');
+    if (randomPreview) randomPreview.textContent = formatDuration(getPlan('random').durationMs);
     const tabataPreview = document.getElementById('tabataTotalPreview');
     if (tabataPreview) tabataPreview.textContent = formatDuration(getPlan('tabata').durationMs);
+    const emomPreview = document.getElementById('emomTotalPreview');
+    if (emomPreview) emomPreview.textContent = formatDuration(getPlan('emom').durationMs);
 
     document.querySelectorAll('[data-round-pip]').forEach(pip => {
       const current = Number(pip.dataset.roundPip);
@@ -648,14 +974,29 @@
     animationFrame = 0;
   }
 
-  function triggerAlertFlash() {
+  function triggerAlertFlash(calloutText = '¡Señal!') {
     clearTimeout(alertFlashTimer);
     state.ui.alertFlash = true;
+    state.ui.lastCallout = calloutText;
     updateLiveUi();
     alertFlashTimer = setTimeout(() => {
       state.ui.alertFlash = false;
+      state.ui.lastCallout = '';
       updateLiveUi();
-    }, 650);
+    }, 700);
+  }
+
+  function fireRandomReactionStimulus(plan) {
+    playCue('alert');
+    let callout = '¡Señal!';
+    if (plan.cueType === 'numbers') {
+      callout = NUMBER_CALLOUTS[Math.floor(Math.random() * NUMBER_CALLOUTS.length)];
+      later(() => say(callout, true), 95);
+    } else if (plan.cueType === 'combat') {
+      callout = generateKarateCallout();
+      later(() => say(callout, true), 95);
+    }
+    triggerAlertFlash(callout);
   }
 
   function startOrResume() {
@@ -678,7 +1019,11 @@
     }
 
     const usePrep = state.preferences.preparation;
-    const firstPhaseDuration = usePrep ? 3000 : (currentPlan.mode === 'tabata' ? currentPlan.workMs : currentPlan.durationMs);
+    const prepDurationMs = number(state.preferences.prepSeconds, 3, 15, 3) * 1000;
+    const firstWorkMs = currentPlan.workMs || currentPlan.durationMs;
+    const firstPhaseDuration = usePrep ? prepDurationMs : firstWorkMs;
+    const initialCountdownSec = Math.ceil(firstPhaseDuration / 1000);
+
     state.session = {
       ...createIdleSession(),
       running: true,
@@ -689,8 +1034,8 @@
       phaseStartedAt: now,
       endAt: now + firstPhaseDuration,
       startedAt: now,
-      alertSchedule: currentPlan.mode === 'random' ? createRandomSchedule(currentPlan.durationMs, currentPlan.alerts) : [],
-      cueFlags: { countdownSecond: 4 }
+      alertSchedule: currentPlan.mode === 'random' ? createRandomSchedule(firstWorkMs, currentPlan.alerts) : [],
+      cueFlags: { countdownSecond: usePrep ? Math.min(4, initialCountdownSec) : 4 }
     };
     if (state.session.phase === 'work') {
       announceWorkStart(true);
@@ -719,6 +1064,7 @@
     stopTick();
     clearTimeout(alertFlashTimer);
     state.ui.alertFlash = false;
+    state.ui.lastCallout = '';
     releaseWakeLock();
     state.session = createIdleSession();
     render();
@@ -734,6 +1080,17 @@
       s.endAt = now + s.remainingMs;
     } else if (s.running) {
       scheduleTick();
+    }
+  }
+
+  function incrementScore(delta = 1) {
+    const s = state.session;
+    s.score = Math.max(0, Math.min(9999, (s.score || 0) + delta));
+    const scoreNode = document.getElementById('scoreValue');
+    if (scoreNode) {
+      scoreNode.textContent = String(s.score);
+    } else {
+      render();
     }
   }
 
@@ -785,7 +1142,7 @@
       return;
     }
     if (s.phase === 'work') {
-      if (s.plan.mode !== 'tabata' || s.round >= s.plan.rounds) {
+      if (s.round >= s.plan.rounds) {
         finishSession();
         return;
       }
@@ -820,18 +1177,29 @@
 
   function beginWork(boundaryAt) {
     const s = state.session;
+    const workMs = s.plan.workMs || s.plan.durationMs;
     s.phase = 'work';
-    s.durationMs = s.plan.mode === 'tabata' ? s.plan.workMs : s.plan.durationMs;
-    s.remainingMs = s.durationMs;
+    s.durationMs = workMs;
+    s.remainingMs = workMs;
     s.phaseStartedAt = boundaryAt;
-    s.endAt = boundaryAt + s.durationMs;
+    s.endAt = boundaryAt + workMs;
     s.cueFlags = {};
+    if (s.plan.mode === 'random') {
+      s.alertIndex = 0;
+      s.alertsFired = 0;
+      s.alertSchedule = createRandomSchedule(workMs, s.plan.alerts);
+    }
   }
 
   function announceWorkStart(withCue) {
     const s = state.session;
     if (withCue) playCue('go');
-    const msg = s.plan.mode === 'tabata' ? `Ronda ${s.round}. A trabajar` : 'Comenzamos';
+    let msg = 'Comenzamos';
+    if (s.plan.mode === 'emom') {
+      msg = `Minuto ${s.round}`;
+    } else if (s.plan.rounds > 1) {
+      msg = `Ronda ${s.round}. A trabajar`;
+    }
     later(() => say(msg, true), withCue ? 320 : 0);
   }
 
@@ -854,8 +1222,7 @@
         due += 1;
       }
       if (due) {
-        playCue('alert');
-        triggerAlertFlash();
+        fireRandomReactionStimulus(s.plan);
       }
     }
     if (s.durationMs >= 40000 && !s.cueFlags.halfway && s.remainingMs <= s.durationMs / 2) {
@@ -864,7 +1231,12 @@
     }
     if (s.durationMs >= 15000 && !s.cueFlags.tenSeconds && s.remainingMs <= 10000) {
       s.cueFlags.tenSeconds = true;
-      say('Diez segundos');
+      playCue('clapper');
+      later(() => say('Diez segundos'), 260);
+    }
+    if (s.plan.mode === 'emom' && remainingSeconds > 0 && remainingSeconds <= 3 && remainingSeconds !== s.cueFlags.countdownSecond) {
+      s.cueFlags.countdownSecond = remainingSeconds;
+      playCue('countdown');
     }
   }
 
@@ -879,6 +1251,7 @@
     stopTick();
     clearTimeout(alertFlashTimer);
     state.ui.alertFlash = false;
+    state.ui.lastCallout = '';
     releaseWakeLock();
     saveCompletedSession(s);
     render();
@@ -892,10 +1265,59 @@
       completedAt: new Date().toISOString(),
       mode: s.plan.mode,
       durationMs: s.plan.durationMs,
-      rounds: s.plan.rounds
+      rounds: s.plan.rounds,
+      score: s.score || 0
     });
-    state.history = state.history.slice(0, 80);
+    state.history = state.history.slice(0, 100);
     persist();
+  }
+
+  function saveCurrentRoutine() {
+    const input = document.getElementById('routineNameInput');
+    const rawName = (input ? input.value : state.ui.routineNameDraft).trim();
+    const mode = state.activeMode;
+    const defaultName = `${modeLabel(mode)} (${formatDuration(getPlan(mode).durationMs)})`;
+    const name = (rawName || defaultName).slice(0, 32);
+
+    const configCopy = JSON.parse(JSON.stringify(state.settings[mode]));
+    state.savedRoutines.unshift({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2, 7)}`,
+      name,
+      mode,
+      config: configCopy
+    });
+    state.savedRoutines = state.savedRoutines.slice(0, 12);
+    state.ui.routineNameDraft = '';
+    persist();
+    render();
+    showToast(`Rutina "${name}" guardada.`);
+  }
+
+  function loadRoutineById(routineId) {
+    if (state.session.running || state.session.paused) {
+      showToast('Reiniciá la sesión actual para cargar una rutina.', 'warning');
+      return;
+    }
+    const found = state.savedRoutines.find(r => r.id === routineId);
+    if (!found) return;
+    state.activeMode = found.mode;
+    state.settings[found.mode] = {
+      ...state.settings[found.mode],
+      ...found.config
+    };
+    const sanitized = sanitizeStoredData(state);
+    state.settings = sanitized.settings;
+    state.session = createIdleSession(state.activeMode);
+    persist();
+    render();
+    showToast(`Rutina "${found.name}" cargada.`);
+  }
+
+  function deleteRoutineById(routineId) {
+    state.savedRoutines = state.savedRoutines.filter(r => r.id !== routineId);
+    persist();
+    render();
+    showToast('Rutina eliminada.');
   }
 
   function exportHistoryJson() {
@@ -905,6 +1327,7 @@
         exportedAt: new Date().toISOString(),
         app: 'Timer Round',
         version: 4,
+        savedRoutines: state.savedRoutines,
         history: state.history
       }, null, 2);
       const blob = new Blob([payload], { type: 'application/json' });
@@ -935,8 +1358,11 @@
         }
         const merged = sanitizeHistoryList([...list, ...state.history]).sort(
           (a, b) => new Date(b.completedAt).valueOf() - new Date(a.completedAt).valueOf()
-        ).slice(0, 80);
+        ).slice(0, 100);
         state.history = merged;
+        if (Array.isArray(parsed.savedRoutines)) {
+          state.savedRoutines = sanitizeRoutineList([...parsed.savedRoutines, ...state.savedRoutines]);
+        }
         persist();
         render();
         showToast(`Historial actualizado (${merged.length} sesiones).`);
@@ -954,19 +1380,23 @@
       if (!AudioCtor) return null;
       if (!audioContext || audioContext.state === 'closed') {
         audioContext = new AudioCtor();
+        audioUnlocked = false;
       }
       if (audioContext.state === 'suspended' || audioContext.state === 'interrupted') {
         audioContext.resume().catch(() => {});
       }
-      // Unlock mobile audio pipeline with a silent 1-sample buffer
-      try {
-        const buffer = audioContext.createBuffer(1, 1, 22050);
-        const source = audioContext.createBufferSource();
-        source.buffer = buffer;
-        source.connect(audioContext.destination);
-        source.start(0);
-      } catch (_) {}
-
+      if (!audioUnlocked) {
+        try {
+          const buffer = audioContext.createBuffer(1, 1, 22050);
+          const source = audioContext.createBufferSource();
+          source.buffer = buffer;
+          source.connect(audioContext.destination);
+          source.start(0);
+          if (audioContext.state === 'running') {
+            audioUnlocked = true;
+          }
+        } catch (_) {}
+      }
       return audioContext;
     } catch (_) {
       return null;
@@ -984,14 +1414,12 @@
         const oscillator = ctx.createOscillator();
         const gainNode = ctx.createGain();
 
-        // Calculate clear, audible volume scaled to preferences (volume 1-100)
         const userVol = Math.max(0, Math.min(100, state.preferences.volume)) / 100;
         const peakVolume = Math.max(0.02, userVol * 0.85 * gainMultiplier);
 
         oscillator.type = type;
         oscillator.frequency.setValueAtTime(frequency, now);
 
-        // Linear envelope with fast attack and clean release (no clicks, full sustained volume)
         const attackTime = 0.008;
         const releaseTime = Math.min(0.04, duration * 0.35);
         const sustainEndTime = Math.max(now + attackTime, now + duration - releaseTime);
@@ -1028,7 +1456,6 @@
     if (!state.preferences.sound && !state.preferences.vibration) return;
 
     if (kind === 'prep') {
-      // Tono característico de preparación (doble señal de aviso ascendente, sin voz)
       playTone(550, 0.09, 'sine', 0.85);
       later(() => playTone(720, 0.13, 'triangle', 0.9), 110);
       vibrate([60, 40, 60]);
@@ -1044,9 +1471,14 @@
       later(() => playTone(390, 0.32, 'sine'), 120);
       vibrate([100, 60, 100]);
     } else if (kind === 'alert') {
-      // Auténtico PIP de reacción: agudo, instantáneo y penetrante para reflejos inmediatos
       playTone(2100, 0.075, 'triangle', 0.95);
       vibrate([45]);
+    } else if (kind === 'clapper') {
+      // Tablilla clásica de ring (3 golpes secos de aviso a los 10 segundos)
+      playTone(1480, 0.045, 'square', 0.7);
+      later(() => playTone(1480, 0.045, 'square', 0.7), 85);
+      later(() => playTone(1480, 0.055, 'square', 0.75), 170);
+      vibrate([35, 35, 35]);
     } else if (kind === 'finish') {
       playTone(784, 0.18, 'triangle');
       later(() => playTone(988, 0.18, 'triangle'), 150);
@@ -1138,7 +1570,7 @@
   }
 
   function setMode(mode) {
-    if (!['random', 'tabata', 'focus'].includes(mode)) return;
+    if (!VALID_MODES.includes(mode)) return;
     if (state.session.running || state.session.paused) {
       showToast('Reiniciá la sesión actual para cambiar de modo.', 'warning');
       return;
@@ -1155,11 +1587,12 @@
     const [group, key] = field.split('.');
 
     if (group === 'preferences') {
-      const fallback = state.preferences[key] !== undefined ? state.preferences[key] : 70;
+      const fallback = state.preferences[key] !== undefined ? state.preferences[key] : range[0];
       state.preferences[key] = number(rawValue, range[0], range[1], fallback);
       persist();
       const label = document.getElementById('volumeValue');
       if (label && key === 'volume') label.textContent = `${state.preferences.volume}%`;
+      if (shouldRender) render();
       return;
     }
 
@@ -1250,6 +1683,14 @@
     if (action === 'toggle') return state.session.running ? pauseSession() : startOrResume();
     if (action === 'reset') return resetSession();
     if (action === 'skip-phase') return skipCurrentPhase();
+    if (action === 'increment-score') {
+      playTone(1320, 0.045, 'sine', 0.45);
+      return incrementScore(1);
+    }
+    if (action === 'reset-score') {
+      state.session.score = 0;
+      return render();
+    }
     if (action === 'toggle-settings') {
       state.ui.settingsOpen = !state.ui.settingsOpen;
       return render();
@@ -1259,7 +1700,27 @@
     }
     if (action === 'random-preset') {
       if (state.session.running || state.session.paused) return;
-      state.settings.random.minutes = number(button.dataset.value, 1, 120, 1);
+      const preset = RANDOM_PRESETS[Number(button.dataset.presetIndex)];
+      if (preset) {
+        state.settings.random = {
+          ...state.settings.random,
+          minutes: preset.minutes,
+          alerts: preset.alerts,
+          rounds: preset.rounds,
+          rest: preset.rest
+        };
+      } else if (button.dataset.value) {
+        state.settings.random.minutes = number(button.dataset.value, 1, 120, 1);
+      }
+      state.session = createIdleSession();
+      persist();
+      return render();
+    }
+    if (action === 'set-cue-type') {
+      if (state.session.running || state.session.paused) return;
+      const cueType = button.dataset.cueType;
+      if (!VALID_CUE_TYPES.includes(cueType)) return;
+      state.settings.random.cueType = cueType;
       state.session = createIdleSession();
       persist();
       return render();
@@ -1273,6 +1734,15 @@
       persist();
       return render();
     }
+    if (action === 'emom-preset') {
+      if (state.session.running || state.session.paused) return;
+      const preset = EMOM_PRESETS[Number(button.dataset.presetIndex)];
+      if (!preset) return;
+      state.settings.emom = { interval: preset.interval, rounds: preset.rounds };
+      state.session = createIdleSession();
+      persist();
+      return render();
+    }
     if (action === 'focus-preset') {
       if (state.session.running || state.session.paused) return;
       const preset = FOCUS_PRESETS[Number(button.dataset.presetIndex)];
@@ -1281,6 +1751,13 @@
       state.session = createIdleSession();
       persist();
       return render();
+    }
+    if (action === 'save-routine') return saveCurrentRoutine();
+    if (action === 'load-routine') return loadRoutineById(button.dataset.routineId);
+    if (action === 'delete-routine') return deleteRoutineById(button.dataset.routineId);
+    if (action === 'set-prep-seconds') {
+      updateSetting('preferences.prepSeconds', button.dataset.value, true);
+      return;
     }
     if (action === 'toggle-preference') return togglePreference(button.dataset.preference);
     if (action === 'test-sound') {
@@ -1291,13 +1768,24 @@
         return showToast('El volumen está al 0%. Subí el deslizador de volumen.', 'warning');
       }
       prepareAudio();
-      playCue('alert');
-      return showToast('Pip de reacción emitido.');
+      fireRandomReactionStimulus(getPlan('random'));
+      return showToast('Estímulo de prueba emitido.');
     }
     if (action === 'open-history') return openHistoryModal();
     if (action === 'close-history') {
       if (button.classList.contains('modal-backdrop') && event.target.closest('[data-modal-content]')) return;
       return closeHistoryModal();
+    }
+    if (action === 'filter-history') {
+      state.ui.historyFilter = button.dataset.filter || 'all';
+      return render();
+    }
+    if (action === 'delete-history-item') {
+      const id = button.dataset.historyId;
+      state.history = state.history.filter(item => item.id !== id);
+      persist();
+      render();
+      return showToast('Sesión eliminada.');
     }
     if (action === 'clear-history') {
       if (!state.history.length) return;
@@ -1341,6 +1829,10 @@
   }
 
   function onAppInput(event) {
+    if (event.target.id === 'routineNameInput') {
+      state.ui.routineNameDraft = event.target.value;
+      return;
+    }
     if (event.target.dataset.field === 'preferences.volume') {
       updateSetting('preferences.volume', event.target.value, false);
     } else if (event.target.matches('input[data-field]')) {
@@ -1350,19 +1842,23 @@
   }
 
   function onAppKeydown(event) {
+    if (event.key === 'Enter' && event.target.id === 'routineNameInput') {
+      event.preventDefault();
+      saveCurrentRoutine();
+      return;
+    }
     if (event.key === 'Enter' && event.target.matches('input[data-field]')) {
       event.preventDefault();
       event.target.blur();
       return;
     }
     if (event.target.matches('[role="tab"]')) {
-      const modes = ['random', 'tabata', 'focus'];
-      const currentIdx = modes.indexOf(event.target.dataset.mode);
+      const currentIdx = VALID_MODES.indexOf(event.target.dataset.mode);
       if (currentIdx === -1) return;
       if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') {
         event.preventDefault();
         const delta = event.key === 'ArrowRight' ? 1 : -1;
-        const nextMode = modes[(currentIdx + delta + modes.length) % modes.length];
+        const nextMode = VALID_MODES[(currentIdx + delta + VALID_MODES.length) % VALID_MODES.length];
         setMode(nextMode);
         const nextTab = app && app.querySelector(`[data-mode="${nextMode}"]`);
         if (nextTab) nextTab.focus();
@@ -1383,10 +1879,14 @@
     if (globalListenersBound) return;
     globalListenersBound = true;
 
+    const unlockEvents = ['pointerdown', 'touchstart', 'keydown', 'click'];
     const unlockAudio = () => {
-      prepareAudio();
+      const ctx = prepareAudio();
+      if (ctx && ctx.state === 'running') {
+        unlockEvents.forEach(type => window.removeEventListener(type, unlockAudio, { passive: true }));
+      }
     };
-    ['pointerdown', 'touchstart', 'keydown', 'click'].forEach(eventType => {
+    unlockEvents.forEach(eventType => {
       window.addEventListener(eventType, unlockAudio, { passive: true });
     });
 
@@ -1403,6 +1903,9 @@
       if (event.code === 'Space') {
         event.preventDefault();
         state.session.running ? pauseSession() : startOrResume();
+      } else if (event.key.toLowerCase() === 'c' && (state.session.running || state.session.paused)) {
+        playTone(1320, 0.045, 'sine', 0.45);
+        incrementScore(1);
       } else if (event.key.toLowerCase() === 'r' && canReset(state.session)) {
         resetSession();
       } else if (event.key.toLowerCase() === 'm') {
@@ -1478,10 +1981,14 @@
       pauseSession,
       resetSession,
       skipCurrentPhase,
+      incrementScore,
       setMode,
       updateSetting,
       stepField,
-      togglePreference
+      togglePreference,
+      saveCurrentRoutine,
+      loadRoutineById,
+      deleteRoutineById
     },
     audio: {
       prepareAudio,
@@ -1493,9 +2000,15 @@
       number,
       sanitizeStoredData,
       sanitizeHistoryList,
+      sanitizeRoutineList,
       migrateHistoryItem,
       getPlan,
       createRandomSchedule,
+      calculateStreakDays,
+      generateKarateCallout,
+      COMBAT_CALLOUTS,
+      KARATE_COMBINATIONS,
+      KARATE_DISPLACEMENTS,
       formatTime,
       formatDuration
     }
@@ -1505,3 +2018,4 @@
     mount(app);
   }
 })();
+
