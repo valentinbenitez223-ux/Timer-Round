@@ -695,8 +695,7 @@
     if (state.session.phase === 'work') {
       announceWorkStart(true);
     } else {
-      playCue('countdown');
-      later(() => say('Prepárate', true), 120);
+      playCue('prep');
     }
     render();
     scheduleTick();
@@ -857,9 +856,6 @@
       if (due) {
         playCue('alert');
         triggerAlertFlash();
-        if (state.preferences.voice) {
-          later(() => say('¡Cambio!'), 240);
-        }
       }
     }
     if (s.durationMs >= 40000 && !s.cueFlags.halfway && s.remainingMs <= s.durationMs / 2) {
@@ -1031,7 +1027,12 @@
   function playCue(kind) {
     if (!state.preferences.sound && !state.preferences.vibration) return;
 
-    if (kind === 'countdown') {
+    if (kind === 'prep') {
+      // Tono característico de preparación (doble señal de aviso ascendente, sin voz)
+      playTone(550, 0.09, 'sine', 0.85);
+      later(() => playTone(720, 0.13, 'triangle', 0.9), 110);
+      vibrate([60, 40, 60]);
+    } else if (kind === 'countdown') {
       playTone(800, 0.14, 'triangle');
       vibrate([50]);
     } else if (kind === 'go') {
@@ -1043,9 +1044,9 @@
       later(() => playTone(390, 0.32, 'sine'), 120);
       vibrate([100, 60, 100]);
     } else if (kind === 'alert') {
-      playTone(1350, 0.14, 'square', 0.7);
-      later(() => playTone(1650, 0.18, 'square', 0.7), 100);
-      vibrate([80, 50, 80]);
+      // Auténtico PIP de reacción: agudo, instantáneo y penetrante para reflejos inmediatos
+      playTone(2100, 0.075, 'triangle', 0.95);
+      vibrate([45]);
     } else if (kind === 'finish') {
       playTone(784, 0.18, 'triangle');
       later(() => playTone(988, 0.18, 'triangle'), 150);
@@ -1291,7 +1292,7 @@
       }
       prepareAudio();
       playCue('alert');
-      return showToast('Sonido de prueba emitido.');
+      return showToast('Pip de reacción emitido.');
     }
     if (action === 'open-history') return openHistoryModal();
     if (action === 'close-history') {
