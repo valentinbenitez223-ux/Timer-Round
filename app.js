@@ -692,8 +692,12 @@
       alertSchedule: currentPlan.mode === 'random' ? createRandomSchedule(currentPlan.durationMs, currentPlan.alerts) : [],
       cueFlags: { countdownSecond: 4 }
     };
-    if (state.session.phase === 'work') announceWorkStart(false);
-    else say('Prepárate', true);
+    if (state.session.phase === 'work') {
+      announceWorkStart(true);
+    } else {
+      playCue('countdown');
+      later(() => say('Prepárate', true), 120);
+    }
     render();
     scheduleTick();
   }
@@ -767,7 +771,7 @@
       announceWorkStart(true);
     } else if (s.phase === 'rest') {
       playCue('rest');
-      say('Descanso', true);
+      later(() => say('Descanso', true), 320);
     }
   }
 
@@ -799,7 +803,7 @@
         s.cueFlags = { countdownSecond: 4 };
         if (!silent) {
           playCue('rest');
-          say('Descanso', true);
+          later(() => say('Descanso', true), 320);
         }
       }
       if (!silent) render();
@@ -828,8 +832,8 @@
   function announceWorkStart(withCue) {
     const s = state.session;
     if (withCue) playCue('go');
-    if (s.plan.mode === 'tabata') say(`Ronda ${s.round}. A trabajar`, true);
-    else say('Comenzamos', true);
+    const msg = s.plan.mode === 'tabata' ? `Ronda ${s.round}. A trabajar` : 'Comenzamos';
+    later(() => say(msg, true), withCue ? 320 : 0);
   }
 
   function processCues(s) {
@@ -853,6 +857,9 @@
       if (due) {
         playCue('alert');
         triggerAlertFlash();
+        if (state.preferences.voice) {
+          later(() => say('¡Cambio!'), 240);
+        }
       }
     }
     if (s.durationMs >= 40000 && !s.cueFlags.halfway && s.remainingMs <= s.durationMs / 2) {
@@ -880,9 +887,7 @@
     saveCompletedSession(s);
     render();
     playCue('finish');
-    later(() => playCue('finish'), 180);
-    later(() => playCue('finish'), 360);
-    later(() => say('Entrenamiento completado. Gran trabajo.', true), 620);
+    later(() => say('Entrenamiento completado. Gran trabajo.', true), 900);
   }
 
   function saveCompletedSession(s) {
@@ -947,59 +952,136 @@
   }
 
   function prepareAudio() {
-    if (!state.preferences.sound) return;
+    if (!state.preferences.sound) return null;
     try {
       const AudioCtor = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtor) return;
-      audioContext = audioContext || new AudioCtor();
-      if (audioContext.state === 'suspended') audioContext.resume().catch(() => {});
-    } catch (_) {}
+      if (!AudioCtor) return null;
+      if (!audioContext || audioContext.state === 'closed') {
+        audioContext = new AudioCtor();
+      }
+      if (audioContext.state === 'suspended' || audioContext.state === 'interrupted') {
+        audioContext.resume().catch(() => {});
+      }
+      // Unlock mobile audio pipeline with a silent 1-sample buffer
+      try {
+        const buffer = audioContext.createBuffer(1, 1, 22050);
+        const source = audioContext.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioContext.destination);
+        source.start(0);
+      } catch (_) {}
+
+      return audioContext;
+    } catch (_) {
+      return null;
+    }
   }
 
-  function playTone(frequency, duration = 0.13, type = 'sine') {
+  function playTone(frequency, duration = 0.16, type = 'triangle', gainMultiplier = 1) {
     if (!state.preferences.sound || !state.preferences.volume) return;
-    prepareAudio();
-    if (!audioContext) return;
-    try {
-      const oscillator = audioContext.createOscillator();
-      const gain = audioContext.createGain();
-      const volume = Math.max(0.0001, (state.preferences.volume / 100) * 0.26);
-      oscillator.type = type;
-      oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
-      gain.gain.setValueAtTime(0.0001, audioContext.currentTime);
-      gain.gain.exponentialRampToValueAtTime(volume, audioContext.currentTime + 0.015);
-      gain.gain.exponentialRampToValueAtTime(0.0001, audioContext.currentTime + duration);
-      oscillator.connect(gain).connect(audioContext.destination);
-      activeOscillators.add(oscillator);
-      oscillator.onended = () => activeOscillators.delete(oscillator);
-      oscillator.start();
-      oscillator.stop(audioContext.currentTime + duration + 0.02);
-    } catch (_) {}
+    const ctx = prepareAudio();
+    if (!ctx) return;
+
+    const executeTone = () => {
+      try {
+        const now = ctx.currentTime;
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        // Calculate clear, audible volume scaled to preferences (volume 1-100)
+        const userVol = Math.max(0, Math.min(100, state.preferences.volume)) / 100;
+        const peakVolume = Math.max(0.02, userVol * 0.85 * gainMultiplier);
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, now);
+
+        // Linear envelope with fast attack and clean release (no clicks, full sustained volume)
+        const attackTime = 0.008;
+        const releaseTime = Math.min(0.04, duration * 0.35);
+        const sustainEndTime = Math.max(now + attackTime, now + duration - releaseTime);
+
+        gainNode.gain.setValueAtTime(0.0001, now);
+        gainNode.gain.linearRampToValueAtTime(peakVolume, now + attackTime);
+        gainNode.gain.setValueAtTime(peakVolume, sustainEndTime);
+        gainNode.gain.linearRampToValueAtTime(0.0001, now + duration);
+
+        oscillator.connect(gainNode).connect(ctx.destination);
+        activeOscillators.add(oscillator);
+
+        oscillator.onended = () => {
+          activeOscillators.delete(oscillator);
+          try {
+            oscillator.disconnect();
+            gainNode.disconnect();
+          } catch (_) {}
+        };
+
+        oscillator.start(now);
+        oscillator.stop(now + duration + 0.04);
+      } catch (_) {}
+    };
+
+    if (ctx.state === 'suspended' || ctx.state === 'interrupted') {
+      ctx.resume().then(executeTone).catch(executeTone);
+    } else {
+      executeTone();
+    }
   }
 
   function playCue(kind) {
-    const patterns = {
-      countdown: [650, 0.09, 'sine', [45]],
-      go: [1220, 0.28, 'triangle', [160]],
-      rest: [400, 0.26, 'sine', [110, 70, 110]],
-      alert: [1850, 0.16, 'square', [75, 40, 75]],
-      finish: [980, 0.16, 'triangle', [80]]
-    };
-    const [frequency, duration, type, vibration] = patterns[kind] || patterns.alert;
-    playTone(frequency, duration, type);
-    if (state.preferences.vibration && navigator.vibrate) {
-      try { navigator.vibrate(vibration); } catch (_) {}
+    if (!state.preferences.sound && !state.preferences.vibration) return;
+
+    if (kind === 'countdown') {
+      playTone(800, 0.14, 'triangle');
+      vibrate([50]);
+    } else if (kind === 'go') {
+      playTone(1050, 0.30, 'triangle');
+      later(() => playTone(1260, 0.25, 'triangle'), 110);
+      vibrate([180]);
+    } else if (kind === 'rest') {
+      playTone(520, 0.24, 'sine');
+      later(() => playTone(390, 0.32, 'sine'), 120);
+      vibrate([100, 60, 100]);
+    } else if (kind === 'alert') {
+      playTone(1350, 0.14, 'square', 0.7);
+      later(() => playTone(1650, 0.18, 'square', 0.7), 100);
+      vibrate([80, 50, 80]);
+    } else if (kind === 'finish') {
+      playTone(784, 0.18, 'triangle');
+      later(() => playTone(988, 0.18, 'triangle'), 150);
+      later(() => playTone(1175, 0.45, 'triangle'), 300);
+      vibrate([100, 80, 100, 80, 250]);
+    } else {
+      playTone(900, 0.18, 'triangle');
+      vibrate([60]);
+    }
+  }
+
+  function vibrate(pattern) {
+    if (state.preferences.vibration && 'vibrate' in navigator) {
+      try { navigator.vibrate(pattern); } catch (_) {}
     }
   }
 
   function say(text, interrupt = false) {
     if (!state.preferences.voice || !('speechSynthesis' in window)) return;
     try {
-      if (interrupt) window.speechSynthesis.cancel();
+      if (interrupt && window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = 'es-AR';
-      utterance.rate = 1.18;
-      utterance.pitch = 1;
+      const voices = (window.speechSynthesis.getVoices && window.speechSynthesis.getVoices()) || [];
+      const spanishVoice = voices.find(v => v.lang === 'es-AR')
+        || voices.find(v => v.lang && v.lang.startsWith('es'))
+        || voices.find(v => /spanish|español/i.test(v.name));
+      if (spanishVoice) {
+        utterance.voice = spanishVoice;
+        utterance.lang = spanishVoice.lang;
+      } else {
+        utterance.lang = 'es';
+      }
+      utterance.rate = 1.15;
+      utterance.pitch = 1.0;
       window.speechSynthesis.speak(utterance);
     } catch (_) {}
   }
@@ -1201,9 +1283,15 @@
     }
     if (action === 'toggle-preference') return togglePreference(button.dataset.preference);
     if (action === 'test-sound') {
+      if (!state.preferences.sound) {
+        return showToast('Los sonidos están desactivados en Configuración.', 'warning');
+      }
+      if (state.preferences.volume === 0) {
+        return showToast('El volumen está al 0%. Subí el deslizador de volumen.', 'warning');
+      }
       prepareAudio();
       playCue('alert');
-      return showToast('Sonido de prueba.');
+      return showToast('Sonido de prueba emitido.');
     }
     if (action === 'open-history') return openHistoryModal();
     if (action === 'close-history') {
@@ -1244,6 +1332,10 @@
       const [group, key] = field.split('.');
       const currentVal = group === 'preferences' ? state.preferences[key] : state.settings[group][key];
       event.target.value = String(currentVal);
+      if (field === 'preferences.volume' && state.preferences.sound && state.preferences.volume > 0) {
+        prepareAudio();
+        playTone(880, 0.12, 'triangle');
+      }
     }
   }
 
@@ -1289,6 +1381,13 @@
   function bindGlobalListeners() {
     if (globalListenersBound) return;
     globalListenersBound = true;
+
+    const unlockAudio = () => {
+      prepareAudio();
+    };
+    ['pointerdown', 'touchstart', 'keydown', 'click'].forEach(eventType => {
+      window.addEventListener(eventType, unlockAudio, { passive: true });
+    });
 
     window.addEventListener('keydown', event => {
       if (state.ui.historyOpen) {
@@ -1382,6 +1481,12 @@
       updateSetting,
       stepField,
       togglePreference
+    },
+    audio: {
+      prepareAudio,
+      playTone,
+      playCue,
+      say
     },
     utils: {
       number,

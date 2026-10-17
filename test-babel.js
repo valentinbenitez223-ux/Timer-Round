@@ -72,6 +72,7 @@
     assert('createRandomSchedule() genera señales ordenadas y con separación mínima', schedule.length === 15 && isSortedAndSpaced);
 
     assert('formatTime() formatea correctamente mm:ss', utils.formatTime(65000) === '01:05' && utils.formatTime(0) === '00:00');
+    assert('Módulo de audio expuesto y preparado en TimerRound', Boolean(target.api.audio && typeof target.api.audio.playCue === 'function'));
   } else {
     assert('Motor TimerRound accesible en vista de prueba', false, 'No se encontró window.TimerRound');
   }
