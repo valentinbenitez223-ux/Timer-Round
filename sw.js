@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timer-round-v10';
+const CACHE_NAME = 'timer-round-v12';
 const APP_SHELL = [
   './',
   './index.html',
@@ -30,6 +30,18 @@ self.addEventListener('message', event => {
   }
 });
 
+self.addEventListener('notificationclick', event => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clientList => {
+      for (const client of clientList) {
+        if (client.url && 'focus' in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow('./');
+    })
+  );
+});
+
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET' || new URL(event.request.url).origin !== self.location.origin) return;
 
@@ -39,7 +51,9 @@ self.addEventListener('fetch', event => {
         .then(response => {
           if (response.ok) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put('./index.html', copy));
+            caches.open(CACHE_NAME)
+              .then(cache => cache.put('./index.html', copy))
+              .catch(() => {});
           }
           return response;
         })
@@ -53,7 +67,9 @@ self.addEventListener('fetch', event => {
       .then(response => {
         if (response.ok) {
           const copy = response.clone();
-          caches.open(CACHE_NAME).then(cache => cache.put(event.request, copy));
+          caches.open(CACHE_NAME)
+            .then(cache => cache.put(event.request, copy))
+            .catch(() => {});
         }
         return response;
       })

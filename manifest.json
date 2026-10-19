@@ -1,7 +1,7 @@
 {
   "name": "Timer Round",
   "short_name": "Timer Round",
-  "description": "Temporizador de rounds, Tabata y enfoque para entrenar sin distracciones.",
+  "description": "Temporizador de rounds, Tabata, EMOM y enfoque para entrenar sin distracciones.",
   "lang": "es-AR",
   "start_url": "./index.html",
   "scope": "./",
@@ -15,6 +15,29 @@
       "sizes": "any",
       "type": "image/svg+xml",
       "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Round Aleatorio",
+      "short_name": "Aleatorio",
+      "description": "Iniciar entrenamiento de reacción con señales al azar",
+      "url": "./index.html?mode=random",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Intervalos Tabata",
+      "short_name": "Tabata",
+      "description": "Iniciar intervalos de trabajo y descanso",
+      "url": "./index.html?mode=tabata",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Modo EMOM",
+      "short_name": "EMOM",
+      "description": "Cada minuto en el minuto",
+      "url": "./index.html?mode=emom",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
     }
   ]
 }

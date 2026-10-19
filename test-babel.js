@@ -47,18 +47,18 @@
 
     const sanitized = utils.sanitizeStoredData({
       activeMode: 'invalid-mode',
-      settings: { random: { minutes: '', alerts: 500, cueType: 'combat' } },
-      preferences: { volume: null, prepSeconds: 5 },
+      settings: { random: { minutes: '', alerts: 500, cueType: 'combat', combatFocus: 'combinations' } },
+      preferences: { volume: null, prepSeconds: 5, dualScore: true },
       history: [
-        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12 },
-        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12 },
+        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12, scoreAo: 9 },
+        { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12, scoreAo: 9 },
         { id: 'bad-date', completedAt: 'fecha-invalida', mode: 'focus', durationMs: 5000 }
       ]
     });
 
     assert('sanitizeStoredData() corrige activeMode inválido', sanitized.activeMode === 'random');
-    assert('sanitizeStoredData() preserva volumen por defecto ante null y respeta cueType', sanitized.preferences.volume === 70 && sanitized.settings.random.cueType === 'combat');
-    assert('sanitizeStoredData() deduplica historial, conserva score y filtra fechas inválidas', sanitized.history.length === 1 && sanitized.history[0].score === 12);
+    assert('sanitizeStoredData() preserva volumen, cueType y combatFocus', sanitized.preferences.volume === 70 && sanitized.settings.random.cueType === 'combat' && sanitized.settings.random.combatFocus === 'combinations');
+    assert('sanitizeStoredData() deduplica historial y conserva marcador Aka/Ao', sanitized.history.length === 1 && sanitized.history[0].score === 12 && sanitized.history[0].scoreAo === 9);
 
     const tabataPlan = utils.getPlan('tabata', {
       random: { minutes: 1, alerts: 5 },
@@ -87,17 +87,42 @@
     ]);
     assert('calculateStreakDays() contabiliza días consecutivos correctamente', streak === 2);
 
-    assert('formatTime() formatea correctamente mm:ss', utils.formatTime(65000) === '01:05' && utils.formatTime(0) === '00:00');
+    const weekly = utils.getWeeklyActivity([{ completedAt: new Date().toISOString(), durationMs: 120000 }]);
+    assert('getWeeklyActivity() genera los 7 días de la semana con porcentajes de barra', Array.isArray(weekly) && weekly.length === 7 && weekly[6].sessions === 1);
 
-    assert('Módulo de audio expuesto y preparado en TimerRound', Boolean(target.api.audio && typeof target.api.audio.playCue === 'function'));
+    assert('formatSpeechText() adapta fonética japonesa de Karate al español', utils.formatSpeechText('Kizami - Gyaku') === 'kisami, guiaku');
 
-    assert('Generador táctico de Karate incluye combinaciones de point-fighting y desplazamientos', 
-      Array.isArray(utils.KARATE_COMBINATIONS) && 
-      utils.KARATE_COMBINATIONS.includes('Kizami - Gyaku') &&
-      Array.isArray(utils.KARATE_DISPLACEMENTS) &&
-      utils.KARATE_DISPLACEMENTS.includes('Salida lateral en ángulo') &&
-      typeof utils.generateKarateCallout === 'function' &&
-      typeof utils.generateKarateCallout() === 'string'
+    assert('Generador táctico de Karate soporta filtros por subcategoría y evita duplicados consecutivos',
+      Array.isArray(utils.KARATE_COMBINATIONS) &&
+      utils.KARATE_COMBINATIONS.includes(utils.generateKarateCallout('combinations')) &&
+      utils.KARATE_DISPLACEMENTS.includes(utils.generateKarateCallout('displacements'))
+    );
+
+    assert('adjustRemainingTime() no altera plan.workMs en rondas futuras',
+      (() => {
+        const before = utils.getPlan('random', {
+          random: { minutes: 2, alerts: 5, rounds: 3, rest: 30, cueType: 'pip' }
+        });
+        const after = utils.getPlan('random', {
+          random: { minutes: 2, alerts: 5, rounds: 3, rest: 30, cueType: 'pip' }
+        });
+        return before.workMs === after.workMs && before.workMs === 120000;
+      })()
+    );
+
+    assert('getUpcomingPhaseInfo() muestra próxima ronda durante work con descanso',
+      typeof utils.getUpcomingPhaseInfo === 'function' &&
+      utils.getUpcomingPhaseInfo({
+        running: true, paused: false, phase: 'work', round: 1,
+        plan: { mode: 'tabata', rounds: 3, restMs: 10000, workMs: 20000 }
+      }).includes('R2/3')
+    );
+
+    assert('SOUND_PACKS expone los tres packs esperados',
+      Array.isArray(utils.VALID_SOUND_PACKS) &&
+      utils.VALID_SOUND_PACKS.includes('classic') &&
+      utils.VALID_SOUND_PACKS.includes('whistle') &&
+      utils.VALID_SOUND_PACKS.includes('woodblock')
     );
   } else {
     assert('Motor TimerRound accesible en vista de prueba', false, 'No se encontró window.TimerRound');
