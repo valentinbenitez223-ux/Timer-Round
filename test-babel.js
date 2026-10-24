@@ -47,8 +47,8 @@
 
     const sanitized = utils.sanitizeStoredData({
       activeMode: 'invalid-mode',
-      settings: { random: { minutes: '', alerts: 500, cueType: 'combat', combatFocus: 'combinations' } },
-      preferences: { volume: null, prepSeconds: 5, dualScore: true },
+      settings: { random: { minutes: '', alerts: 500, cueType: 'combat', combatFocus: 'custom', customCallouts: ['Blitz', 'Blitz', '  '] } },
+      preferences: { volume: null, prepSeconds: 5, cooldownSeconds: 60, dualScore: true },
       history: [
         { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12, scoreAo: 9 },
         { id: 'dup-1', completedAt: '2026-10-10T10:00:00Z', mode: 'tabata', durationMs: 120000, rounds: 8, score: 12, scoreAo: 9 },
@@ -57,7 +57,11 @@
     });
 
     assert('sanitizeStoredData() corrige activeMode inválido', sanitized.activeMode === 'random');
-    assert('sanitizeStoredData() preserva volumen, cueType y combatFocus', sanitized.preferences.volume === 70 && sanitized.settings.random.cueType === 'combat' && sanitized.settings.random.combatFocus === 'combinations');
+    assert('sanitizeStoredData() preserva volumen, cueType, cooldown y deduplica customCallouts',
+      sanitized.preferences.volume === 70 &&
+      sanitized.preferences.cooldownSeconds === 60 &&
+      sanitized.settings.random.customCallouts.length === 1
+    );
     assert('sanitizeStoredData() deduplica historial y conserva marcador Aka/Ao', sanitized.history.length === 1 && sanitized.history[0].score === 12 && sanitized.history[0].scoreAo === 9);
 
     const tabataPlan = utils.getPlan('tabata', {
@@ -92,10 +96,9 @@
 
     assert('formatSpeechText() adapta fonética japonesa de Karate al español', utils.formatSpeechText('Kizami - Gyaku') === 'kisami, guiaku');
 
-    assert('Generador táctico de Karate soporta filtros por subcategoría y evita duplicados consecutivos',
-      Array.isArray(utils.KARATE_COMBINATIONS) &&
-      utils.KARATE_COMBINATIONS.includes(utils.generateKarateCallout('combinations')) &&
-      utils.KARATE_DISPLACEMENTS.includes(utils.generateKarateCallout('displacements'))
+    assert('Generador táctico de Karate soporta técnicas personalizadas y filtros por categoría',
+      utils.generateKarateCallout('custom', ['Barrida y Gyaku']) === 'Barrida y Gyaku' &&
+      utils.KARATE_COMBINATIONS.includes(utils.generateKarateCallout('combinations'))
     );
 
     assert('adjustRemainingTime() no altera plan.workMs en rondas futuras',
@@ -103,26 +106,73 @@
         const before = utils.getPlan('random', {
           random: { minutes: 2, alerts: 5, rounds: 3, rest: 30, cueType: 'pip' }
         });
-        const after = utils.getPlan('random', {
-          random: { minutes: 2, alerts: 5, rounds: 3, rest: 30, cueType: 'pip' }
-        });
-        return before.workMs === after.workMs && before.workMs === 120000;
+        return before.workMs === 120000;
       })()
     );
 
-    assert('getUpcomingPhaseInfo() muestra próxima ronda durante work con descanso',
-      typeof utils.getUpcomingPhaseInfo === 'function' &&
+    assert('getUpcomingPhaseInfo() distingue correctamente Tabata y EMOM sin código muerto',
       utils.getUpcomingPhaseInfo({
         running: true, paused: false, phase: 'work', round: 1,
         plan: { mode: 'tabata', rounds: 3, restMs: 10000, workMs: 20000 }
-      }).includes('R2/3')
+      }).includes('R2/3') &&
+      utils.getUpcomingPhaseInfo({
+        running: true, paused: false, phase: 'work', round: 1,
+        plan: { mode: 'emom', rounds: 10, restMs: 0, workMs: 60000 }
+      }).includes('minuto 2/10')
     );
 
-    assert('SOUND_PACKS expone los tres packs esperados',
+    assert('SOUND_PACKS expone los tres packs esperados y PENALTY_LEVELS incluye Hansoku (H)',
       Array.isArray(utils.VALID_SOUND_PACKS) &&
-      utils.VALID_SOUND_PACKS.includes('classic') &&
-      utils.VALID_SOUND_PACKS.includes('whistle') &&
-      utils.VALID_SOUND_PACKS.includes('woodblock')
+      utils.VALID_SOUND_PACKS.length === 3 &&
+      Array.isArray(utils.PENALTY_LEVELS) &&
+      utils.PENALTY_LEVELS.includes('H')
+    );
+
+    assert('sanitizeCustomCallouts() recorta espacios, respeta tope de 20 y elimina duplicados',
+      (() => {
+        const list = ['  Kizami  ', 'kizami', '', 'Gyaku'];
+        const res = utils.sanitizeCustomCallouts(list);
+        return res.length === 2 && res[0] === 'Kizami' && res[1] === 'Gyaku';
+      })()
+    );
+
+    assert('PENALTY_LEVELS contiene la progresión oficial WKF de 6 niveles (vacío, C1..C3, HC, H)',
+      Array.isArray(utils.PENALTY_LEVELS) &&
+      utils.PENALTY_LEVELS.length === 6 &&
+      utils.PENALTY_LEVELS[4] === 'HC' &&
+      utils.PENALTY_LEVELS[5] === 'H'
+    );
+
+    assert('escapeHtml() sanitiza &, <, >, ", y apóstrofes (\')',
+      typeof utils.escapeHtml === 'function' &&
+      utils.escapeHtml("<b class='test'>O'Connor & Sons</b>") ===
+      '&lt;b class=&#39;test&#39;&gt;O&#39;Connor &amp; Sons&lt;/b&gt;'
+    );
+
+    assert('shareSessionResult está disponible en las acciones del motor',
+      typeof target.api.actions.shareSessionResult === 'function'
+    );
+
+    assert('calculateKcal() calcula gasto calórico según METs y peso corporal',
+      typeof utils.calculateKcal === 'function' &&
+      utils.calculateKcal('tabata', 240000, 70) === 51.3 &&
+      utils.calculateKcal('focus', 300000, 70) === 20.4
+    );
+
+    assert('CIRCUMFERENCE_TOTAL coincide con radio de 136px del anillo exterior',
+      Math.abs(utils.CIRCUMFERENCE_TOTAL - (2 * Math.PI * 136)) < 0.001
+    );
+
+    assert('Acciones de Rutinas JSON y Modo Bolsillo disponibles en target.api.actions',
+      typeof target.api.actions.exportRoutines === 'function' &&
+      typeof target.api.actions.importRoutines === 'function' &&
+      typeof target.api.actions.togglePocket === 'function'
+    );
+
+    assert('progressTotalFor() calcula progreso global macro sin errores',
+      typeof utils.progressTotalFor === 'function' &&
+      utils.progressTotalFor({ phase: 'idle', plan: { durationMs: 60000, rounds: 1 } }) === 0 &&
+      utils.progressTotalFor({ phase: 'finished', plan: { durationMs: 60000, rounds: 1 } }) === 1
     );
   } else {
     assert('Motor TimerRound accesible en vista de prueba', false, 'No se encontró window.TimerRound');

@@ -38,6 +38,13 @@
       "description": "Cada minuto en el minuto",
       "url": "./index.html?mode=emom",
       "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+    },
+    {
+      "name": "Cuenta regresiva",
+      "short_name": "Tiempo",
+      "description": "Temporizador simple de cuenta regresiva",
+      "url": "./index.html?mode=focus",
+      "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
     }
   ]
 }
