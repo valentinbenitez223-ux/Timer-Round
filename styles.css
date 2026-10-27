@@ -347,6 +347,12 @@ button:focus-visible, input:focus-visible, .file-button:focus-visible {
   background: rgba(255, 94, 138, 0.42);
 }
 
+.score-center-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .dual-reset-btn {
   padding: 0 8px;
   font-size: .85rem;
@@ -607,13 +613,18 @@ kbd { padding: 2px 6px; border: 1px solid rgba(255,255,255,.15); border-bottom-w
 .history-heading h2 { margin: 0; font-size: 1.18rem; letter-spacing: -.02em; }
 .history-heading p { margin: 4px 0 0; color: var(--muted); font-size: .75rem; }
 .history-stats { gap: 8px; margin: 16px 0 12px; flex-wrap: wrap; }
-.stat { flex: 1 1 120px; padding: 11px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 15px; background: rgba(255,255,255,.045); }
+.stat { flex: 1 1 100px; padding: 11px 12px; border: 1px solid rgba(255,255,255,.08); border-radius: 15px; background: rgba(255,255,255,.045); }
 .stat:nth-child(1) .stat-value { color: var(--text); }
 .stat:nth-child(2) .stat-value { color: var(--warning); }
 .stat:nth-child(3) .stat-value { color: var(--accent); }
-.stat:nth-child(4) .stat-value { color: var(--success); }
+.stat:nth-child(4) .stat-value { color: #71d2ff; }
+.stat:nth-child(5) .stat-value { color: #f59f00; }
+.stat:nth-child(6) .stat-value { color: var(--success); }
 .stat-value { display: block; color: var(--text); font-size: 1.04rem; font-weight: 820; font-variant-numeric: tabular-nums; }
 .stat-label { display: block; margin-top: 3px; color: var(--muted); font-size: .64rem; font-weight: 700; text-transform: uppercase; letter-spacing: .055em; }
+
+.history-search-row { margin: 12px 0 10px; }
+.history-search-input { width: 100%; }
 
 .weekly-chart {
   display: grid;
@@ -851,6 +862,16 @@ kbd { padding: 2px 6px; border: 1px solid rgba(255,255,255,.15); border-bottom-w
   color: var(--success);
   font-size: .74rem;
   font-weight: 750;
+}
+.finished-badge.winner-aka {
+  background: rgba(255, 94, 138, 0.18);
+  border-color: rgba(255, 94, 138, 0.55);
+  color: #ff5e8a;
+}
+.finished-badge.winner-ao {
+  background: rgba(84, 174, 255, 0.18);
+  border-color: rgba(84, 174, 255, 0.55);
+  color: #54aeff;
 }
 
 @keyframes score-bump {

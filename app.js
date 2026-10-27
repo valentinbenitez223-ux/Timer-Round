@@ -8,7 +8,7 @@
   const VALID_MODES = ['random', 'tabata', 'emom', 'focus'];
   const VALID_CUE_TYPES = ['pip', 'numbers', 'combat'];
   const VALID_COMBAT_FOCUS = ['all', 'combinations', 'displacements', 'actions', 'custom'];
-  const VALID_SOUND_PACKS = ['classic', 'whistle', 'woodblock'];
+  const VALID_SOUND_PACKS = ['classic', 'whistle', 'woodblock', 'buzzer'];
   const PENALTY_LEVELS = ['', 'C1', 'C2', 'C3', 'HC', 'H'];
 
   const SOUND_PACKS = {
@@ -73,6 +73,32 @@
         playTone(1400, 0.12, 'square', 0.8);
         later(() => playTone(1800, 0.12, 'square', 0.85), 130);
         later(() => playTone(2200, 0.30, 'square', 0.9), 260);
+      }
+    },
+    buzzer: {
+      label: 'Buzzer (electrónico)',
+      prep: () => {
+        playTone(340, 0.08, 'sawtooth', 0.65);
+        later(() => playTone(440, 0.12, 'sawtooth', 0.7), 100);
+      },
+      countdown: () => playTone(520, 0.10, 'sawtooth', 0.75),
+      go: () => {
+        playTone(260, 0.28, 'sawtooth', 0.85);
+        playTone(520, 0.28, 'sawtooth', 0.55);
+      },
+      alert: () => playTone(1800, 0.065, 'sawtooth', 0.9),
+      clapper: () => {
+        playTone(900, 0.04, 'sawtooth', 0.75);
+        later(() => playTone(900, 0.04, 'sawtooth', 0.75), 80);
+        later(() => playTone(900, 0.05, 'sawtooth', 0.8), 160);
+      },
+      finish: () => {
+        playTone(220, 0.35, 'sawtooth', 0.9);
+        playTone(440, 0.35, 'sawtooth', 0.6);
+        later(() => {
+          playTone(220, 0.45, 'sawtooth', 0.95);
+          playTone(440, 0.45, 'sawtooth', 0.65);
+        }, 380);
       }
     }
   };
@@ -153,6 +179,7 @@
   let audioUnlocked = false;
   let toastTimer = 0;
   let alertFlashTimer = 0;
+  let phaseTransitionTimer = 0;
   let persistDebounceTimer = 0;
   let lastFocusedElement = null;
   let globalListenersBound = false;
@@ -215,12 +242,16 @@
     { label: '2 min · 15 pips', minutes: 2, alerts: 15, rounds: 1, rest: 30 },
     { label: 'Point Fight 2m×3', minutes: 2, alerts: 12, rounds: 3, rest: 60 },
     { label: 'Full Contact 3m×3', minutes: 3, alerts: 18, rounds: 3, rest: 60 },
+    { label: 'Boxeo Pro 3m×5', minutes: 3, alerts: 15, rounds: 5, rest: 60 },
+    { label: 'Shadow Boxing 2m×4', minutes: 2, alerts: 14, rounds: 4, rest: 45 },
     { label: 'Reacción 1m×5', minutes: 1, alerts: 12, rounds: 5, rest: 30 }
   ];
 
   const TABATA_PRESETS = [
     { label: 'Clásico 20/10×8', work: 20, rest: 10, rounds: 8 },
     { label: 'HIIT 30/15×6', work: 30, rest: 15, rounds: 6 },
+    { label: 'Pliometría 40/20×5', work: 40, rest: 20, rounds: 5 },
+    { label: 'Kumite Drills 45/15×8', work: 45, rest: 15, rounds: 8 },
     { label: 'Combate 120/60×3', work: 120, rest: 60, rounds: 3 },
     { label: 'Sprint 15/15×10', work: 15, rest: 15, rounds: 10 }
   ];
@@ -229,15 +260,51 @@
     { label: 'EMOM 60s×10', interval: 60, rounds: 10 },
     { label: 'EMOM 45s×8', interval: 45, rounds: 8 },
     { label: 'E2MOM 120s×5', interval: 120, rounds: 5 },
+    { label: 'Power Clean 90s×6', interval: 90, rounds: 6 },
+    { label: 'Death by reps 60s×15', interval: 60, rounds: 15 },
     { label: 'Explosivo 30s×12', interval: 30, rounds: 12 }
   ];
 
   const FOCUS_PRESETS = [
+    { label: '45 s (Isométrico)', minutes: 0, seconds: 45 },
     { label: '1 min', minutes: 1, seconds: 0 },
     { label: '3 min', minutes: 3, seconds: 0 },
     { label: '5 min', minutes: 5, seconds: 0 },
-    { label: '15 min', minutes: 15, seconds: 0 },
-    { label: '25 min', minutes: 25, seconds: 0 }
+    { label: '10 min (Movilidad)', minutes: 10, seconds: 0 },
+    { label: '25 min (Pomodoro)', minutes: 25, seconds: 0 }
+  ];
+
+  const OFFICIAL_ROUTINES = [
+    {
+      id: 'template-wkf-kumite',
+      name: 'WKF Kumite 3m × 3',
+      mode: 'random',
+      config: { minutes: 3, alerts: 15, rounds: 3, rest: 60, cueType: 'combat', combatFocus: 'all' }
+    },
+    {
+      id: 'template-tabata-hiit',
+      name: 'Tabata HIIT 20/10 × 8',
+      mode: 'tabata',
+      config: { work: 20, rest: 10, rounds: 8 }
+    },
+    {
+      id: 'template-emom-functional',
+      name: 'EMOM Funcional 60s × 10',
+      mode: 'emom',
+      config: { interval: 60, rounds: 10 }
+    },
+    {
+      id: 'template-boxing-pro',
+      name: 'Boxeo Tradicional 3m × 5',
+      mode: 'random',
+      config: { minutes: 3, alerts: 12, rounds: 5, rest: 60, cueType: 'pip' }
+    },
+    {
+      id: 'template-mobility-isometric',
+      name: 'Isométricos 45s / 15s × 6',
+      mode: 'tabata',
+      config: { work: 45, rest: 15, rounds: 6 }
+    }
   ];
 
   function number(value, min, max, fallback) {
@@ -342,11 +409,15 @@
 
   function sanitizeRoutineList(rawRoutines) {
     if (!Array.isArray(rawRoutines)) return [];
+    const seenSignatures = new Set();
     const sanitized = [];
     for (const item of rawRoutines) {
       if (!item || typeof item !== 'object') continue;
       const name = String(item.name || '').trim().slice(0, 32);
       if (!name || !VALID_MODES.includes(item.mode)) continue;
+      const signature = `${item.mode}:${name.toLowerCase()}`;
+      if (seenSignatures.has(signature)) continue;
+      seenSignatures.add(signature);
       sanitized.push({
         id: String(item.id || `${Date.now()}-${Math.random().toString(16).slice(2)}`),
         name,
@@ -387,10 +458,12 @@
           interval: number(emom.interval, 10, 600, defaults.settings.emom.interval),
           rounds: number(emom.rounds, 1, 60, defaults.settings.emom.rounds)
         },
-        focus: {
-          minutes: number(focus.minutes !== undefined ? focus.minutes : safeRaw.timer_basic_min, 0, 99, defaults.settings.focus.minutes),
-          seconds: number(focus.seconds !== undefined ? focus.seconds : safeRaw.timer_basic_sec, 0, 59, defaults.settings.focus.seconds)
-        }
+        focus: (() => {
+          const m = number(focus.minutes !== undefined ? focus.minutes : safeRaw.timer_basic_min, 0, 99, defaults.settings.focus.minutes);
+          const s = number(focus.seconds !== undefined ? focus.seconds : safeRaw.timer_basic_sec, 0, 59, defaults.settings.focus.seconds);
+          if (m === 0 && s === 0) return { minutes: 1, seconds: 0 };
+          return { minutes: m, seconds: s };
+        })()
       },
       preferences: {
         sound: typeof prefs.sound === 'boolean' ? prefs.sound : defaults.preferences.sound,
@@ -440,6 +513,13 @@
         if (VALID_CUE_TYPES.includes(cue)) targetState.settings.random.cueType = cue;
         const focus = params.get('focus');
         if (VALID_COMBAT_FOCUS.includes(focus)) targetState.settings.random.combatFocus = focus;
+        const custom = params.get('custom');
+        if (custom) {
+          try {
+            const list = custom.split('|').map(s => s.trim()).filter(Boolean);
+            if (list.length) targetState.settings.random.customCallouts = sanitizeCustomCallouts(list);
+          } catch (_) {}
+        }
       } else if (mode === 'tabata') {
         targetState.settings.tabata.work = number(params.get('work'), 1, 600, targetState.settings.tabata.work);
         targetState.settings.tabata.rest = number(params.get('rest'), 0, 600, targetState.settings.tabata.rest);
@@ -448,8 +528,15 @@
         targetState.settings.emom.interval = number(params.get('interval'), 10, 600, targetState.settings.emom.interval);
         targetState.settings.emom.rounds = number(params.get('rounds'), 1, 60, targetState.settings.emom.rounds);
       } else if (mode === 'focus') {
-        targetState.settings.focus.minutes = number(params.get('min'), 0, 99, targetState.settings.focus.minutes);
-        targetState.settings.focus.seconds = number(params.get('sec'), 0, 59, targetState.settings.focus.seconds);
+        const m = number(params.get('min'), 0, 99, targetState.settings.focus.minutes);
+        const s = number(params.get('sec'), 0, 59, targetState.settings.focus.seconds);
+        if (m === 0 && s === 0) {
+          targetState.settings.focus.minutes = 1;
+          targetState.settings.focus.seconds = 0;
+        } else {
+          targetState.settings.focus.minutes = m;
+          targetState.settings.focus.seconds = s;
+        }
       }
     } catch (_) {}
   }
@@ -460,6 +547,7 @@
       settingsOpen: false,
       historyOpen: false,
       historyFilter: 'all',
+      historySearchQuery: '',
       confirmClearHistory: false,
       routineNameDraft: '',
       customCalloutDraft: '',
@@ -491,7 +579,7 @@
       return { mode, durationMs: workMs * rounds, workMs, restMs: 0, rounds, alerts: 0 };
     }
     if (mode === 'focus') {
-      const durationMs = (focus.minutes * 60 + focus.seconds) * 1000;
+      const durationMs = Math.max(1000, (focus.minutes * 60 + focus.seconds) * 1000);
       return { mode, durationMs, workMs: durationMs, restMs: 0, rounds: 1, alerts: 0 };
     }
     const workMs = random.minutes * 60000;
@@ -538,8 +626,21 @@
       alertIndex: 0,
       cueFlags: {},
       timeAdjustedMs: 0,
+      elapsedMs: 0,
+      effectiveDurationMs: 0,
+      phaseElapsedRecorded: false,
+      scoreHistory: [],
       completed: false
     };
+  }
+
+  function getSessionTotalDuration(s = state.session) {
+    if (!s || !s.plan) return 0;
+    const cooldownMs = (state.preferences.cooldownSeconds || 0) * 1000;
+    if (s.phase === 'finished' && s.effectiveDurationMs > 0) {
+      return s.effectiveDurationMs;
+    }
+    return Math.max(1000, s.plan.durationMs + cooldownMs + (s.timeAdjustedMs || 0));
   }
 
   state.session = createIdleSession();
@@ -622,6 +723,25 @@
     return '';
   }
 
+  function getCombatResultMessage(s = state.session) {
+    if (!s || (s.score === 0 && s.scoreAo === 0 && !s.senshu && (s.penaltyAka || 0) === 0 && (s.penaltyAo || 0) === 0)) {
+      return '';
+    }
+    const akaHansoku = (s.penaltyAka || 0) >= 5;
+    const aoHansoku = (s.penaltyAo || 0) >= 5;
+    if (akaHansoku && aoHansoku) return 'Descalificación mutua · Hansoku';
+    if (akaHansoku) return 'Victoria Ao · Hansoku Aka';
+    if (aoHansoku) return 'Victoria Aka · Hansoku Ao';
+    const diff = (s.score || 0) - (s.scoreAo || 0);
+    if (diff >= 8) return `Victoria Aka (+${diff} pts)`;
+    if (diff <= -8) return `Victoria Ao (+${Math.abs(diff)} pts)`;
+    if (diff > 0) return `Victoria Aka (${s.score} - ${s.scoreAo})`;
+    if (diff < 0) return `Victoria Ao (${s.scoreAo} - ${s.score})`;
+    if (s.senshu === 'aka') return `Victoria Aka por Senshu (${s.score} - ${s.scoreAo})`;
+    if (s.senshu === 'ao') return `Victoria Ao por Senshu (${s.score} - ${s.scoreAo})`;
+    return `Empate (${s.score} - ${s.scoreAo})`;
+  }
+
   function persistSessionSnapshot() {
     const s = state.session;
     if (!s || (!s.running && !s.paused)) {
@@ -644,12 +764,15 @@
         senshu: s.senshu || '',
         penaltyAka: s.penaltyAka || 0,
         penaltyAo: s.penaltyAo || 0,
+        scoreHistory: Array.isArray(s.scoreHistory) ? s.scoreHistory.slice(-25) : [],
         durationMs,
         remainingMs,
         alertsFired: s.alertsFired || 0,
         alertIndex: s.alertIndex || 0,
         alertSchedule: s.alertSchedule || [],
-        timeAdjustedMs: s.timeAdjustedMs || 0
+        cueFlags: s.cueFlags ? { ...s.cueFlags } : {},
+        timeAdjustedMs: s.timeAdjustedMs || 0,
+        elapsedMs: s.elapsedMs || 0
       }));
     } catch (_) {}
   }
@@ -659,7 +782,15 @@
       const raw = sessionStorage.getItem(SESSION_RECOVERY_KEY);
       if (!raw) return null;
       const snap = JSON.parse(raw);
-      if (!snap || Date.now() - snap.savedAt > 4 * 60 * 60 * 1000) {
+      if (!snap || typeof snap !== 'object' || Date.now() - snap.savedAt > 4 * 60 * 60 * 1000) {
+        sessionStorage.removeItem(SESSION_RECOVERY_KEY);
+        return null;
+      }
+      if (!snap.plan || typeof snap.plan !== 'object' || !VALID_MODES.includes(snap.plan.mode)) {
+        sessionStorage.removeItem(SESSION_RECOVERY_KEY);
+        return null;
+      }
+      if (typeof snap.remainingMs !== 'number' || snap.remainingMs <= 0 || typeof snap.durationMs !== 'number') {
         sessionStorage.removeItem(SESSION_RECOVERY_KEY);
         return null;
       }
@@ -670,8 +801,11 @@
   function acceptSessionRecovery() {
     const snap = state.ui.recoverySnapshot;
     if (!snap) return;
+    if (snap.plan && VALID_MODES.includes(snap.plan.mode)) {
+      state.activeMode = snap.plan.mode;
+    }
     state.session = {
-      ...createIdleSession(),
+      ...createIdleSession(snap.plan ? snap.plan.mode : state.activeMode),
       running: false,
       paused: true,
       phase: snap.phase || 'work',
@@ -682,12 +816,15 @@
       senshu: snap.senshu || '',
       penaltyAka: snap.penaltyAka || 0,
       penaltyAo: snap.penaltyAo || 0,
+      scoreHistory: Array.isArray(snap.scoreHistory) ? snap.scoreHistory : [],
       durationMs: snap.durationMs,
       remainingMs: snap.remainingMs,
       alertSchedule: snap.alertSchedule || [],
       alertIndex: snap.alertIndex || 0,
       alertsFired: snap.alertsFired || 0,
-      timeAdjustedMs: snap.timeAdjustedMs || 0
+      cueFlags: snap.phase === 'prep' ? {} : (snap.cueFlags ? { ...snap.cueFlags } : {}),
+      timeAdjustedMs: snap.timeAdjustedMs || 0,
+      elapsedMs: snap.elapsedMs || 0
     };
     state.ui.recoveryAvailable = false;
     state.ui.recoverySnapshot = null;
@@ -710,7 +847,7 @@
         <span class="recovery-text">${icon('alert')}<span>Sesión interrumpida · ${escapeHtml(modeLabel(state.ui.recoverySnapshot.plan.mode))}</span></span>
         <div class="recovery-actions">
           <button class="button button-tertiary" type="button" data-action="dismiss-recovery">Descartar</button>
-          <button class="button button-primary recovery-btn" type="button" data-action="recover-session">Reanudar</button>
+          <button class="button button-primary recovery-btn" type="button" data-action="recover-session">Restaurar sesión</button>
         </div>
       </div>`;
   }
@@ -1009,6 +1146,10 @@
         <span id="toastText">${escapeHtml(toast.message)}</span>
       </div>
     `;
+    if (state.ui.historyOpen) {
+      const modal = document.querySelector('[data-modal-content]');
+      if (modal) trapFocus(modal);
+    }
     updateLiveUi();
   }
 
@@ -1035,7 +1176,10 @@
               <button class="senshu-btn ${s.senshu === 'aka' ? 'active' : ''}" type="button" data-action="toggle-senshu" data-fighter="aka" title="Senshu Aka (Primer punto)">S</button>
               <button class="penalty-btn ${s.penaltyAka > 0 ? 'active' : ''}" type="button" data-action="cycle-penalty" data-fighter="aka" title="Penalización Aka (C1-H)">${penAkaLabel}</button>
             </div>
-            <button class="counter-reset dual-reset-btn" type="button" data-action="reset-score" aria-label="Reiniciar Aka y Ao" title="Reiniciar tablero">↺</button>
+            <div class="score-center-actions">
+              <button class="counter-reset dual-reset-btn" type="button" data-action="undo-score" aria-label="Deshacer última acción" title="Deshacer acción (Tecla Z)" ${s.scoreHistory && s.scoreHistory.length ? '' : 'disabled'}>↶</button>
+              <button class="counter-reset dual-reset-btn" type="button" data-action="reset-score" aria-label="Reiniciar Aka y Ao" title="Reiniciar tablero">↺</button>
+            </div>
             <div class="score-fighter ao">
               <button class="penalty-btn ${s.penaltyAo > 0 ? 'active' : ''}" type="button" data-action="cycle-penalty" data-fighter="ao" title="Penalización Ao (C1-H)">${penAoLabel}</button>
               <button class="senshu-btn ${s.senshu === 'ao' ? 'active' : ''}" type="button" data-action="toggle-senshu" data-fighter="ao" title="Senshu Ao (Primer punto)">S</button>
@@ -1051,6 +1195,7 @@
               ${icon('plus')}
               <span>Marcador: <strong id="scoreValue">${s.score}</strong></span>
             </button>
+            ${s.scoreHistory && s.scoreHistory.length ? `<button class="counter-reset" type="button" data-action="undo-score" title="Deshacer (Tecla Z)">↶</button>` : ''}
             ${s.score > 0 ? `<button class="counter-reset" type="button" data-action="reset-score" title="Reiniciar a 0">0</button>` : ''}
           </div>
         `}
@@ -1096,12 +1241,14 @@
 
   function modeSummaryMarkup(s, showPips) {
     if (s.phase === 'finished') {
-      const dur = formatDuration(s.durationMs || s.plan.durationMs);
+      const totalMs = getSessionTotalDuration(s);
+      const dur = formatDuration(totalMs);
       const roundsText = s.plan.rounds > 1 ? `${s.round}/${s.plan.rounds} rondas` : '1 round';
-      const kcalVal = calculateKcal(s.plan.mode, s.durationMs || s.plan.durationMs, state.preferences.userWeightKg);
-      const kcalBadge = kcalVal > 0 ? `<span class="finished-badge">${kcalVal} kcal</span>` : '';
-      const scoreBadge = s.scoreAo > 0
-        ? `<span class="finished-badge">Aka ${s.score} - ${s.scoreAo} Ao</span>`
+      const kcalVal = calculateKcal(s.plan.mode, totalMs, state.preferences.userWeightKg);
+      const kcalBadge = kcalVal > 0 ? `<span class="finished-badge" title="Estimación metabólica aproximada">${kcalVal} kcal*</span>` : '';
+      const combatOutcome = getCombatResultMessage(s);
+      const scoreBadge = combatOutcome
+        ? `<span class="finished-badge ${combatOutcome.includes('Aka') ? 'winner-aka' : combatOutcome.includes('Ao') ? 'winner-ao' : ''}">${escapeHtml(combatOutcome)}</span>`
         : s.score > 0
         ? `<span class="finished-badge">${s.score} pts</span>`
         : '';
@@ -1281,7 +1428,7 @@
       </div>
       <div class="history-io" style="margin-top: 10px;">
         <button class="button button-tertiary" type="button" data-action="export-routines" ${routines.length ? '' : 'disabled'}>${icon('download')}<span>Exportar rutinas</span></button>
-        <label class="button button-tertiary file-button" tabindex="0">
+        <label class="button button-tertiary file-button" role="button" tabindex="0" aria-label="Importar archivo de rutinas JSON">
           ${icon('upload')}<span>Importar rutinas</span>
           <input type="file" id="importRoutinesInput" accept="application/json,.json" class="hidden">
         </label>
@@ -1299,6 +1446,16 @@
           `).join('')}
         </div>
       ` : ''}
+      <div class="official-templates-block" style="margin-top: 14px;">
+        <span class="field-label">Plantillas oficiales recomendadas</span>
+        <div class="preset-grid preset-grid-wrap" style="margin-top: 6px;">
+          ${OFFICIAL_ROUTINES.map(tpl => `
+            <button class="preset-button" type="button" data-action="load-routine" data-routine-id="${escapeHtml(tpl.id)}" title="Cargar ${escapeHtml(tpl.name)}">
+              ${icon('bookmark')} <span>${escapeHtml(tpl.name)}</span>
+            </button>
+          `).join('')}
+        </div>
+      </div>
     </div>`;
   }
 
@@ -1314,6 +1471,32 @@
       </div>`;
   }
 
+  function getNotificationStatusHelp() {
+    if (typeof window === 'undefined' || !('Notification' in window)) {
+      return 'No compatible con este navegador';
+    }
+    if (Notification.permission === 'granted') {
+      return 'Notificaciones activadas al completar la sesión';
+    }
+    if (Notification.permission === 'denied') {
+      return 'Bloqueadas desde los ajustes del navegador';
+    }
+    return 'Recibí un aviso si minimizás la pestaña durante el round';
+  }
+
+  function getNotificationBtnLabel() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'No disponible';
+    if (Notification.permission === 'granted') return 'Activadas ✓';
+    if (Notification.permission === 'denied') return 'Bloqueadas';
+    return 'Activar avisos';
+  }
+
+  function getNotificationBtnDisabled() {
+    if (typeof window === 'undefined' || !('Notification' in window)) return 'disabled';
+    if (Notification.permission === 'granted' || Notification.permission === 'denied') return 'disabled';
+    return '';
+  }
+
   function renderPreferences() {
     const prefs = state.preferences;
     return `<div class="settings-section">
@@ -1324,6 +1507,15 @@
       <div class="switch-row">${switchCopy('Marcador dual WKF (Aka / Ao)', 'Tanteador doble con Senshu, faltas y ventaja de 8 puntos', 'dualScore', prefs.dualScore)}</div>
       <div class="switch-row">${switchCopy('Vista Tatami (Pantalla grande)', 'Reloj y tanteador ampliados para lectura a distancia', 'tatamiView', prefs.tatamiView)}</div>
       <div class="switch-row">${switchCopy('Cuenta previa', 'Conteo regresivo antes de arrancar el primer round', 'preparation', prefs.preparation)}</div>
+      <div class="switch-row">
+        <span class="switch-copy">
+          <span class="switch-title">Aviso al terminar en segundo plano</span>
+          <span class="switch-help">${getNotificationStatusHelp()}</span>
+        </span>
+        <button class="button button-tertiary" type="button" data-action="request-notifications" ${getNotificationBtnDisabled()}>
+          ${getNotificationBtnLabel()}
+        </button>
+      </div>
       ${prefs.preparation ? `
         <div class="prep-duration-row">
           <span class="field-label">Segundos de preparación</span>
@@ -1365,6 +1557,8 @@
         <div class="range-row">
           <input data-field="preferences.volume" type="range" min="0" max="100" value="${prefs.volume}" aria-label="Volumen de señales">
           <button class="button button-tertiary" type="button" data-action="test-sound">Probar sonido</button>
+          <button class="button button-tertiary" type="button" data-action="test-voice">Probar voz</button>
+          <button class="button button-tertiary" type="button" data-action="test-vibration">Probar vibración</button>
         </div>
       </div>
       <div class="settings-section">
@@ -1376,8 +1570,12 @@
       <div class="settings-actions">
         <div class="shortcut-list">
           <span><kbd>Espacio</kbd> iniciar / pausar</span>
-          <span><kbd>C</kbd> +1 Aka/Serie</span>
+          <span><kbd>C</kbd> +1 Aka</span>
+          <span><kbd>X</kbd> −1 Aka</span>
           <span><kbd>V</kbd> +1 Ao</span>
+          <span><kbd>B</kbd> −1 Ao</span>
+          <span><kbd>Z</kbd> deshacer</span>
+          <span><kbd>S</kbd> saltar fase</span>
           <span><kbd>T</kbd> vista tatami</span>
           <span><kbd>P</kbd> modo bolsillo</span>
           <span><kbd>R</kbd> reiniciar</span>
@@ -1395,8 +1593,18 @@
   function renderHistoryModal() {
     const history = state.history;
     const filter = state.ui.historyFilter;
-    const filtered = filter === 'all' ? history : history.filter(item => item.mode === filter);
+    const searchQuery = String(state.ui.historySearchQuery || '').trim().toLowerCase();
+    const filtered = history.filter(item => {
+      if (filter !== 'all' && item.mode !== filter) return false;
+      if (!searchQuery) return true;
+      const modeTxt = modeLabel(item.mode).toLowerCase();
+      const dateTxt = new Date(item.completedAt).toLocaleDateString('es-AR').toLowerCase();
+      const scoreTxt = `aka ${item.score} ao ${item.scoreAo}`.toLowerCase();
+      return modeTxt.includes(searchQuery) || dateTxt.includes(searchQuery) || scoreTxt.includes(searchQuery);
+    });
     const total = history.reduce((sum, item) => sum + item.durationMs, 0);
+    const avgDuration = history.length ? Math.round(total / history.length) : 0;
+    const totalKcal = history.reduce((sum, item) => sum + (item.kcal || 0), 0);
     const weekStart = new Date();
     weekStart.setHours(0, 0, 0, 0);
     weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
@@ -1410,14 +1618,16 @@
         <div class="history-heading">
           <div>
             <h2 id="historyTitle">Tu historial y progreso</h2>
-            <p>Las sesiones se guardan en este dispositivo. Podés filtrarlas o exportarlas en JSON.</p>
+            <p>Las sesiones se guardan en este dispositivo. Podés filtrarlas, buscarlas o exportarlas.</p>
           </div>
           <button class="icon-button" type="button" id="closeHistoryButton" data-action="close-history" aria-label="Cerrar historial">${icon('close')}</button>
         </div>
-        <div class="history-stats four-stats">
+        <div class="history-stats">
           <div class="stat"><span class="stat-value">${history.length}</span><span class="stat-label">Sesiones</span></div>
           <div class="stat"><span class="stat-value">${streakDays} ${streakDays === 1 ? 'día' : 'días'}</span><span class="stat-label">Racha actual</span></div>
           <div class="stat"><span class="stat-value">${formatDuration(weekTotal)}</span><span class="stat-label">Esta semana</span></div>
+          <div class="stat"><span class="stat-value">${formatDuration(avgDuration)}</span><span class="stat-label">Promedio</span></div>
+          <div class="stat"><span class="stat-value">${totalKcal} kcal</span><span class="stat-label">Total Kcal</span></div>
           <div class="stat"><span class="stat-value">${formatDuration(total)}</span><span class="stat-label">Acumulado</span></div>
         </div>
         <div class="weekly-chart" aria-label="Actividad de los últimos 7 días">
@@ -1429,6 +1639,9 @@
               <span class="chart-label">${day.label}</span>
             </div>
           `).join('')}
+        </div>
+        <div class="history-search-row">
+          <input class="text-input" id="historySearchInput" type="search" placeholder="Buscar por fecha, modo o tanteador…" value="${escapeHtml(state.ui.historySearchQuery || '')}" aria-label="Buscar en historial">
         </div>
         <div class="history-tools">
           <div class="history-filters" role="group" aria-label="Filtrar por modo">
@@ -1443,14 +1656,15 @@
             `).join('')}
           </div>
           <div class="history-io">
-            <button class="button button-tertiary" type="button" data-action="export-history" ${history.length ? '' : 'disabled'}>${icon('download')}<span>Exportar</span></button>
-            <label class="button button-tertiary file-button" tabindex="0">
+            <button class="button button-tertiary" type="button" data-action="export-history" ${history.length ? '' : 'disabled'}>${icon('download')}<span>JSON</span></button>
+            <button class="button button-tertiary" type="button" data-action="export-csv" ${history.length ? '' : 'disabled'}>${icon('download')}<span>CSV</span></button>
+            <label class="button button-tertiary file-button" role="button" tabindex="0" aria-label="Importar archivo de historial JSON">
               ${icon('upload')}<span>Importar</span>
               <input type="file" id="importHistoryInput" accept="application/json,.json" class="hidden">
             </label>
           </div>
         </div>
-        <div class="history-list">${filtered.length ? filtered.map(renderHistoryItem).join('') : '<p class="empty-history">No hay sesiones registradas en esta vista.</p>'}</div>
+        <div class="history-list">${filtered.length ? filtered.map(renderHistoryItem).join('') : `<p class="empty-history">${history.length ? 'No se encontraron sesiones que coincidan con la búsqueda.' : 'No hay sesiones registradas todavía. ¡Completá tu primer entrenamiento!'}</p>`}</div>
         <div class="modal-actions">
           ${confirming
             ? `<div class="confirm-inline">
@@ -1488,19 +1702,52 @@
       </article>`;
   }
 
+  let cachedDom = null;
+  let lastRingOffset = -1;
+  let lastTotalOffset = -1;
+  let lastPipsRound = -1;
+
+  function refreshDomCache() {
+    cachedDom = {
+      time: document.getElementById('timeValue'),
+      phase: document.getElementById('phaseLabel'),
+      detail: document.getElementById('phaseDetail'),
+      ring: document.getElementById('progressRing'),
+      ringTotal: document.getElementById('progressRingTotal'),
+      card: document.getElementById('timerCard'),
+      brandMark: document.getElementById('brandMark'),
+      sub15Btn: document.querySelector('[data-action="adjust-time"][data-delta-ms="-15000"]'),
+      alerts: document.getElementById('alertsNumber'),
+      round: document.getElementById('roundNumber'),
+      totalRemNode: document.getElementById('totalRemainingValue'),
+      scoreNode: document.getElementById('scoreValue'),
+      scoreAoNode: document.getElementById('scoreAoValue'),
+      upcoming: document.getElementById('upcomingPhase'),
+      upcomingRow: document.querySelector('.upcoming-row'),
+      summaryDuration: document.getElementById('summaryDuration'),
+      summaryAlerts: document.getElementById('summaryAlerts'),
+      pips: document.querySelectorAll('[data-round-pip]')
+    };
+  }
+
   function updateLiveUi() {
     const s = state.session;
     updateDocumentTitle(s);
-    const time = document.getElementById('timeValue');
-    const phase = document.getElementById('phaseLabel');
-    const detail = document.getElementById('phaseDetail');
-    const ring = document.getElementById('progressRing');
-    const card = document.getElementById('timerCard');
+    if (!cachedDom || !cachedDom.card || !cachedDom.card.isConnected) {
+      refreshDomCache();
+    }
+    const { time, phase, detail, ring, ringTotal, card, brandMark, sub15Btn, alerts, round, totalRemNode, scoreNode, scoreAoNode, upcoming, upcomingRow, summaryDuration, summaryAlerts, pips } = cachedDom;
     if (!time || !phase || !detail || !ring || !card) return;
 
     const copy = getPhaseCopy(s);
-    time.textContent = displayValue(s);
-    time.classList.toggle('countdown', s.phase === 'prep');
+    const timeVal = displayValue(s);
+    if (time.textContent !== timeVal) {
+      time.textContent = timeVal;
+    }
+    const isPrep = s.phase === 'prep';
+    if (time.classList.contains('countdown') !== isPrep) {
+      time.classList.toggle('countdown', isPrep);
+    }
 
     if (phase.dataset.currentLabel !== copy.label) {
       phase.dataset.currentLabel = copy.label;
@@ -1510,7 +1757,8 @@
       } else {
         phase.classList.remove('phase-enter');
         phase.classList.add('phase-exit');
-        setTimeout(() => {
+        clearTimeout(phaseTransitionTimer);
+        phaseTransitionTimer = setTimeout(() => {
           phase.textContent = copy.label;
           phase.classList.toggle('compact-kicker', copy.label.length > 16);
           phase.classList.remove('phase-exit');
@@ -1520,19 +1768,42 @@
     } else {
       phase.classList.toggle('compact-kicker', copy.label.length > 16);
     }
-    detail.textContent = copy.detail;
-    ring.style.strokeDashoffset = String(CIRCUMFERENCE * (1 - progressFor(s)));
-    const ringTotal = document.getElementById('progressRingTotal');
-    if (ringTotal) {
-      ringTotal.style.strokeDashoffset = String(CIRCUMFERENCE_TOTAL * (1 - progressTotalFor(s)));
-    }
-    card.dataset.phase = s.paused ? 'paused' : s.phase;
-    card.dataset.theme = s.paused ? 'paused' : ['prep', 'rest', 'cooldown', 'finished'].includes(s.phase) ? (s.phase === 'cooldown' ? 'rest' : s.phase) : s.plan.mode;
-    card.classList.toggle('alert-flash', Boolean(state.ui.alertFlash));
-    const isFinalTen = s.running && s.phase === 'work' && s.remainingMs <= 10000 && s.remainingMs > 0;
-    card.classList.toggle('final-ten-urgency', isFinalTen);
 
-    const brandMark = document.getElementById('brandMark');
+    if (detail.textContent !== copy.detail) {
+      detail.textContent = copy.detail;
+    }
+
+    if (!state.ui.pocketMode) {
+      const ringOffset = CIRCUMFERENCE * (1 - progressFor(s));
+      if (Math.abs(lastRingOffset - ringOffset) > 0.25 || s.phase === 'finished') {
+        ring.style.strokeDashoffset = String(ringOffset);
+        lastRingOffset = ringOffset;
+      }
+      if (ringTotal) {
+        const totalOffset = CIRCUMFERENCE_TOTAL * (1 - progressTotalFor(s));
+        if (Math.abs(lastTotalOffset - totalOffset) > 0.25 || s.phase === 'finished') {
+          ringTotal.style.strokeDashoffset = String(totalOffset);
+          lastTotalOffset = totalOffset;
+        }
+      }
+    }
+
+    const cardPhase = s.paused ? 'paused' : s.phase;
+    if (card.dataset.phase !== cardPhase) card.dataset.phase = cardPhase;
+
+    const cardTheme = s.paused ? 'paused' : ['prep', 'rest', 'cooldown', 'finished'].includes(s.phase) ? (s.phase === 'cooldown' ? 'rest' : s.phase) : s.plan.mode;
+    if (card.dataset.theme !== cardTheme) card.dataset.theme = cardTheme;
+
+    const isAlertFlash = Boolean(state.ui.alertFlash);
+    if (card.classList.contains('alert-flash') !== isAlertFlash) {
+      card.classList.toggle('alert-flash', isAlertFlash);
+    }
+
+    const isFinalTen = s.running && s.phase === 'work' && s.remainingMs <= 10000 && s.remainingMs > 0;
+    if (card.classList.contains('final-ten-urgency') !== isFinalTen) {
+      card.classList.toggle('final-ten-urgency', isFinalTen);
+    }
+
     if (brandMark) {
       const currentIcon = s.phase === 'finished' ? 'check'
         : (s.running && s.phase === 'work') ? 'play'
@@ -1544,46 +1815,55 @@
       }
     }
 
-    const sub15Btn = document.querySelector('[data-action="adjust-time"][data-delta-ms="-15000"]');
-    if (sub15Btn) sub15Btn.disabled = s.remainingMs <= 15000;
+    if (sub15Btn) {
+      const shouldDisable = s.remainingMs <= 15000;
+      if (sub15Btn.disabled !== shouldDisable) sub15Btn.disabled = shouldDisable;
+    }
 
-    const alerts = document.getElementById('alertsNumber');
-    if (alerts) alerts.textContent = `${s.alertsFired}/${s.alertSchedule.length || s.plan.alerts}`;
-    const round = document.getElementById('roundNumber');
-    if (round) round.textContent = `${s.round}/${s.plan.rounds}`;
-    const totalRemNode = document.getElementById('totalRemainingValue');
-    if (totalRemNode) totalRemNode.textContent = formatTime(getTotalRemainingMs(s));
-    const scoreNode = document.getElementById('scoreValue');
-    if (scoreNode) scoreNode.textContent = String(s.score);
-    const scoreAoNode = document.getElementById('scoreAoValue');
-    if (scoreAoNode) scoreAoNode.textContent = String(s.scoreAo);
+    if (alerts) {
+      const alertsStr = `${s.alertsFired}/${s.alertSchedule.length || s.plan.alerts}`;
+      if (alerts.textContent !== alertsStr) alerts.textContent = alertsStr;
+    }
+    if (round) {
+      const roundStr = `${s.round}/${s.plan.rounds}`;
+      if (round.textContent !== roundStr) round.textContent = roundStr;
+    }
+    if (totalRemNode) {
+      const totalStr = formatTime(getTotalRemainingMs(s));
+      if (totalRemNode.textContent !== totalStr) totalRemNode.textContent = totalStr;
+    }
+    if (scoreNode && scoreNode.textContent !== String(s.score)) {
+      scoreNode.textContent = String(s.score);
+    }
+    if (scoreAoNode && scoreAoNode.textContent !== String(s.scoreAo)) {
+      scoreAoNode.textContent = String(s.scoreAo);
+    }
 
     updateWkfAdvantageBadge(s);
 
-    const upcoming = document.getElementById('upcomingPhase');
     if (upcoming) {
       const info = getUpcomingPhaseInfo(s);
-      upcoming.textContent = info;
-      const row = upcoming.closest('.upcoming-row');
-      if (row) row.style.display = info ? 'flex' : 'none';
+      if (upcoming.textContent !== info) {
+        upcoming.textContent = info;
+        if (upcomingRow) upcomingRow.style.display = info ? 'flex' : 'none';
+      }
     }
 
-    const summaryDuration = document.getElementById('summaryDuration');
-    if (summaryDuration) summaryDuration.textContent = formatDuration(s.plan.durationMs);
-    const summaryAlerts = document.getElementById('summaryAlerts');
-    if (summaryAlerts) summaryAlerts.textContent = String(s.plan.alerts);
-    const randomPreview = document.getElementById('randomTotalPreview');
-    if (randomPreview) randomPreview.textContent = formatDuration(getPlan('random').durationMs);
-    const tabataPreview = document.getElementById('tabataTotalPreview');
-    if (tabataPreview) tabataPreview.textContent = formatDuration(getPlan('tabata').durationMs);
-    const emomPreview = document.getElementById('emomTotalPreview');
-    if (emomPreview) emomPreview.textContent = formatDuration(getPlan('emom').durationMs);
+    if (summaryDuration && summaryDuration.textContent !== formatDuration(s.plan.durationMs)) {
+      summaryDuration.textContent = formatDuration(s.plan.durationMs);
+    }
+    if (summaryAlerts && summaryAlerts.textContent !== String(s.plan.alerts)) {
+      summaryAlerts.textContent = String(s.plan.alerts);
+    }
 
-    document.querySelectorAll('[data-round-pip]').forEach(pip => {
-      const current = Number(pip.dataset.roundPip);
-      pip.classList.toggle('complete', current < s.round);
-      pip.classList.toggle('current', current === s.round);
-    });
+    if (pips && pips.length && lastPipsRound !== s.round) {
+      lastPipsRound = s.round;
+      pips.forEach(pip => {
+        const current = Number(pip.dataset.roundPip);
+        pip.classList.toggle('complete', current < s.round);
+        pip.classList.toggle('current', current === s.round);
+      });
+    }
   }
 
   function updateWkfAdvantageBadge(s) {
@@ -1604,10 +1884,12 @@
     const akaCorner = document.querySelector('.score-fighter.aka');
     const aoCorner = document.querySelector('.score-fighter.ao');
     if (akaCorner && aoCorner) {
-      const isAkaLead8 = (s.score - s.scoreAo >= 8) || (s.penaltyAka < 5 && s.penaltyAo >= 5);
-      const isAoLead8 = (s.scoreAo - s.score >= 8) || (s.penaltyAo < 5 && s.penaltyAka >= 5);
-      const isFinishedWinnerAka = s.phase === 'finished' && s.score > s.scoreAo;
-      const isFinishedWinnerAo = s.phase === 'finished' && s.scoreAo > s.score;
+      const akaDisqualified = (s.penaltyAka || 0) >= 5;
+      const aoDisqualified = (s.penaltyAo || 0) >= 5;
+      const isAkaLead8 = !akaDisqualified && ((s.score - s.scoreAo >= 8) || aoDisqualified);
+      const isAoLead8 = !aoDisqualified && ((s.scoreAo - s.score >= 8) || akaDisqualified);
+      const isFinishedWinnerAka = s.phase === 'finished' && !akaDisqualified && (aoDisqualified || s.score > s.scoreAo || (s.score === s.scoreAo && s.senshu === 'aka'));
+      const isFinishedWinnerAo = s.phase === 'finished' && !aoDisqualified && (akaDisqualified || s.scoreAo > s.score || (s.score === s.scoreAo && s.senshu === 'ao'));
       akaCorner.classList.toggle('winner-corner', isAkaLead8 || isFinishedWinnerAka);
       aoCorner.classList.toggle('winner-corner', isAoLead8 || isFinishedWinnerAo);
     }
@@ -1615,24 +1897,27 @@
 
   function createRandomSchedule(durationMs, alertCount) {
     if (!alertCount || !durationMs || durationMs < 2000) return [];
-    const start = Math.max(800, durationMs * 0.08);
-    const usable = Math.max(1000, durationMs * 0.84);
-    const maxPossibleAlerts = Math.max(1, Math.floor(usable / 750));
+    const start = Math.max(800, Math.floor(durationMs * 0.08));
+    const end = Math.floor(durationMs * 0.92);
+    const usable = Math.max(1000, end - start);
+    const minGapMs = Math.max(300, Math.min(600, Math.floor(usable / (alertCount * 2))));
+    const maxPossibleAlerts = Math.max(1, Math.floor(usable / (minGapMs + 100)));
     const effectiveCount = Math.min(alertCount, maxPossibleAlerts);
     const block = usable / effectiveCount;
-    const minGapMs = Math.min(600, Math.floor(block * 0.35));
 
     const rawSchedule = Array.from({ length: effectiveCount }, (_, index) => {
-      const jitter = (Math.random() - 0.5) * block * 0.6;
+      const jitter = (Math.random() - 0.5) * block * 0.5;
       return Math.round(start + block * (index + 0.5) + jitter);
     }).sort((a, b) => a - b);
 
+    const validSchedule = [rawSchedule[0]];
     for (let i = 1; i < rawSchedule.length; i += 1) {
-      if (rawSchedule[i] - rawSchedule[i - 1] < minGapMs) {
-        rawSchedule[i] = Math.min(durationMs - 500, rawSchedule[i - 1] + minGapMs);
+      const nextTime = Math.max(rawSchedule[i], validSchedule[validSchedule.length - 1] + minGapMs);
+      if (nextTime < durationMs - 500) {
+        validSchedule.push(nextTime);
       }
     }
-    return rawSchedule;
+    return validSchedule;
   }
 
   function scheduleTick() {
@@ -1647,6 +1932,7 @@
 
   function triggerAlertFlash(calloutText = '¡Señal!') {
     clearTimeout(alertFlashTimer);
+    clearTimeout(phaseTransitionTimer);
     state.ui.alertFlash = true;
     state.ui.lastCallout = calloutText;
     state.session.lastSignalText = calloutText;
@@ -1763,9 +2049,15 @@
     if (!canSkipPhase(s)) return;
     clearFeedbackQueue();
     const now = Date.now();
-    advancePhase(now, false);
+    if (s.running) {
+      s.remainingMs = Math.max(0, s.endAt - now);
+    }
+    const isSilent = Boolean(s.paused);
+    advancePhase(now, isSilent, true);
     if (s.paused && s.running === false && s.phase !== 'finished') {
+      s.phaseStartedAt = now;
       s.endAt = now + s.remainingMs;
+      render();
     } else if (s.running) {
       scheduleTick();
     }
@@ -1795,7 +2087,15 @@
     s.timeAdjustedMs = (s.timeAdjustedMs || 0) + appliedDelta;
 
     if (s.running) s.endAt = now + nextRem;
-    if (nextRem > 10000) s.cueFlags.tenSeconds = false;
+    if (nextRem > 10000) {
+      s.cueFlags.tenSeconds = false;
+    } else if (currentRem > 10000 && nextRem <= 9000) {
+      s.cueFlags.tenSeconds = true;
+    }
+    if (s.plan.mode === 'random' && Array.isArray(s.alertSchedule)) {
+      s.alertSchedule = s.alertSchedule.filter(alertTime => alertTime < s.durationMs);
+      s.alertIndex = Math.min(s.alertIndex, s.alertSchedule.length);
+    }
     updateLiveUi();
     persistSessionSnapshot();
   }
@@ -1811,8 +2111,72 @@
     window.setTimeout(() => target.classList.remove('score-bump'), 400);
   }
 
+  function pushScoreSnapshot(actionName = '') {
+    const s = state.session;
+    if (!s) return;
+    if (!Array.isArray(s.scoreHistory)) s.scoreHistory = [];
+    s.scoreHistory.push({
+      score: s.score || 0,
+      scoreAo: s.scoreAo || 0,
+      senshu: s.senshu || '',
+      penaltyAka: s.penaltyAka || 0,
+      penaltyAo: s.penaltyAo || 0,
+      action: actionName,
+      remainingMs: s.remainingMs,
+      round: s.round,
+      timestamp: Date.now()
+    });
+    if (s.scoreHistory.length > 25) s.scoreHistory.shift();
+  }
+
+  function undoLastScoreAction() {
+    const s = state.session;
+    if (!s || !Array.isArray(s.scoreHistory) || !s.scoreHistory.length) {
+      showToast('No hay acciones del tanteador para deshacer.', 'warning');
+      return;
+    }
+    const prev = s.scoreHistory.pop();
+    s.score = prev.score;
+    s.scoreAo = prev.scoreAo;
+    s.senshu = prev.senshu;
+    s.penaltyAka = prev.penaltyAka;
+    s.penaltyAo = prev.penaltyAo;
+
+    const scoreNode = document.getElementById('scoreValue');
+    if (scoreNode) scoreNode.textContent = String(s.score);
+    const scoreAoNode = document.getElementById('scoreAoValue');
+    if (scoreAoNode) scoreAoNode.textContent = String(s.scoreAo);
+
+    const btnAka = document.querySelector('[data-action="toggle-senshu"][data-fighter="aka"]');
+    const btnAo = document.querySelector('[data-action="toggle-senshu"][data-fighter="ao"]');
+    if (btnAka) btnAka.classList.toggle('active', s.senshu === 'aka');
+    if (btnAo) btnAo.classList.toggle('active', s.senshu === 'ao');
+
+    const penAkaBtn = document.querySelector('[data-action="cycle-penalty"][data-fighter="aka"]');
+    if (penAkaBtn) {
+      penAkaBtn.textContent = PENALTY_LEVELS[s.penaltyAka] || 'Falta';
+      penAkaBtn.classList.toggle('active', s.penaltyAka > 0);
+    }
+    const penAoBtn = document.querySelector('[data-action="cycle-penalty"][data-fighter="ao"]');
+    if (penAoBtn) {
+      penAoBtn.textContent = PENALTY_LEVELS[s.penaltyAo] || 'Falta';
+      penAoBtn.classList.toggle('active', s.penaltyAo > 0);
+    }
+
+    const undoBtns = document.querySelectorAll('[data-action="undo-score"]');
+    undoBtns.forEach(b => { b.disabled = s.scoreHistory.length === 0; });
+
+    updateWkfAdvantageBadge(s);
+    if (!state.preferences.dualScore) {
+      render();
+    }
+    persistSessionSnapshot();
+    showToast('Última acción del marcador deshecha.');
+  }
+
   function incrementScore(delta = 1, fighter = 'aka') {
     const s = state.session;
+    pushScoreSnapshot(delta > 0 ? `${fighter}+1` : `${fighter}-1`);
     const oldScore = s.score;
 
     if (fighter === 'ao') {
@@ -1836,6 +2200,9 @@
       updateWkfAdvantageBadge(s);
     }
 
+    const undoBtns = document.querySelectorAll('[data-action="undo-score"]');
+    undoBtns.forEach(b => { b.disabled = false; });
+
     if (delta > 0) {
       animateScoreBump(fighter);
       vibrate(fighter === 'ao' ? [70] : [40]);
@@ -1845,6 +2212,7 @@
 
   function toggleSenshu(fighter) {
     const s = state.session;
+    pushScoreSnapshot(`senshu-${fighter}`);
     s.senshu = s.senshu === fighter ? '' : fighter;
     persistSessionSnapshot();
     const btnAka = document.querySelector('[data-action="toggle-senshu"][data-fighter="aka"]');
@@ -1856,10 +2224,13 @@
     } else {
       render();
     }
+    const undoBtns = document.querySelectorAll('[data-action="undo-score"]');
+    undoBtns.forEach(b => { b.disabled = false; });
   }
 
   function cyclePenalty(fighter) {
     const s = state.session;
+    pushScoreSnapshot(`penalty-${fighter}`);
     if (fighter === 'ao') {
       s.penaltyAo = ((s.penaltyAo || 0) + 1) % PENALTY_LEVELS.length;
     } else {
@@ -1875,6 +2246,8 @@
     } else {
       render();
     }
+    const undoBtns = document.querySelectorAll('[data-action="undo-score"]');
+    undoBtns.forEach(b => { b.disabled = false; });
   }
 
   function tick() {
@@ -1885,7 +2258,7 @@
     let advancedCount = 0;
 
     while (s.running && now >= s.endAt && guard < 150) {
-      advancePhase(s.endAt, true);
+      advancePhase(s.endAt, true, false);
       guard += 1;
       advancedCount += 1;
     }
@@ -1918,8 +2291,19 @@
     }
   }
 
-  function advancePhase(boundaryAt, silent = false) {
+  function recordPhaseElapsed(s, natural = false) {
+    if (!s) return;
+    if (s.phase === 'work' || s.phase === 'rest' || s.phase === 'cooldown') {
+      if (s.phaseElapsedRecorded) return;
+      s.phaseElapsedRecorded = true;
+      const elapsed = natural ? s.durationMs : Math.max(0, s.durationMs - Math.max(0, s.remainingMs));
+      s.elapsedMs = (s.elapsedMs || 0) + elapsed;
+    }
+  }
+
+  function advancePhase(boundaryAt, silent = false, isSkip = false) {
     const s = state.session;
+    recordPhaseElapsed(s, !isSkip);
     if (s.phase === 'prep') {
       beginWork(boundaryAt);
       if (!silent) {
@@ -1932,6 +2316,7 @@
       if (s.round >= s.plan.rounds) {
         if (state.preferences.cooldownSeconds > 0) {
           s.phase = 'cooldown';
+          s.phaseElapsedRecorded = false;
           s.durationMs = state.preferences.cooldownSeconds * 1000;
           s.remainingMs = s.durationMs;
           s.phaseStartedAt = boundaryAt;
@@ -1953,6 +2338,7 @@
         if (!silent) announceWorkStart(true);
       } else {
         s.phase = 'rest';
+        s.phaseElapsedRecorded = false;
         s.durationMs = s.plan.restMs;
         s.remainingMs = s.durationMs;
         s.phaseStartedAt = boundaryAt;
@@ -1984,6 +2370,7 @@
     const s = state.session;
     const workMs = s.plan.workMs || s.plan.durationMs;
     s.phase = 'work';
+    s.phaseElapsedRecorded = false;
     s.durationMs = workMs;
     s.remainingMs = workMs;
     s.phaseStartedAt = boundaryAt;
@@ -2070,6 +2457,10 @@
     s.completed = true;
     s.running = false;
     s.paused = false;
+    recordPhaseElapsed(s, true);
+    const cooldownMs = (state.preferences.cooldownSeconds || 0) * 1000;
+    const plannedTotal = Math.max(1000, s.plan.durationMs + cooldownMs + (s.timeAdjustedMs || 0));
+    s.effectiveDurationMs = (s.elapsedMs && s.elapsedMs > 0) ? s.elapsedMs : plannedTotal;
     s.phase = 'finished';
     s.remainingMs = 0;
     stopTick();
@@ -2086,14 +2477,16 @@
   }
 
   function saveCompletedSession(s) {
+    const totalMs = getSessionTotalDuration(s);
     const cooldownMs = (state.preferences.cooldownSeconds || 0) * 1000;
-    const durationMs = Math.max(1000, s.plan.durationMs + cooldownMs + (s.timeAdjustedMs || 0));
-    const kcal = calculateKcal(s.plan.mode, durationMs, state.preferences.userWeightKg);
+    const plannedMs = Math.max(1000, s.plan.durationMs + cooldownMs + (s.timeAdjustedMs || 0));
+    const kcal = calculateKcal(s.plan.mode, totalMs, state.preferences.userWeightKg);
     state.history.unshift({
       id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
       completedAt: new Date().toISOString(),
       mode: s.plan.mode,
-      durationMs,
+      durationMs: totalMs,
+      plannedDurationMs: plannedMs,
       rounds: s.plan.rounds,
       score: s.score || 0,
       scoreAo: s.scoreAo || 0,
@@ -2139,6 +2532,9 @@
       if (cfg.cueType === 'combat' && cfg.combatFocus) {
         url.searchParams.set('focus', cfg.combatFocus);
       }
+      if (cfg.customCallouts && cfg.customCallouts.length) {
+        url.searchParams.set('custom', cfg.customCallouts.join('|'));
+      }
     } else if (mode === 'tabata') {
       url.searchParams.set('work', cfg.work);
       url.searchParams.set('rest', cfg.rest);
@@ -2177,8 +2573,10 @@
 
   async function shareSessionResult() {
     const s = state.session;
-    const dur = formatDuration(s.durationMs || s.plan.durationMs);
-    const scorePart = s.scoreAo > 0 ? ` · Aka ${s.score} - ${s.scoreAo} Ao` : s.score > 0 ? ` · ${s.score} pts` : '';
+    const totalMs = getSessionTotalDuration(s);
+    const dur = formatDuration(totalMs);
+    const combatOutcome = getCombatResultMessage(s);
+    const scorePart = combatOutcome ? ` · ${combatOutcome}` : s.scoreAo > 0 ? ` · Aka ${s.score} - ${s.scoreAo} Ao` : s.score > 0 ? ` · ${s.score} pts` : '';
     const roundsPart = s.plan.rounds > 1 ? ` · ${s.round}/${s.plan.rounds} rondas` : '';
     const shareText = `🥋 ¡Entrenamiento completado en Timer Round! Modo: ${modeLabel(s.plan.mode)}${roundsPart} · Duración: ${dur}${scorePart}`;
     const url = buildShareableUrl();
@@ -2228,11 +2626,12 @@
       showToast('Reiniciá la sesión actual para cargar una rutina.', 'warning');
       return;
     }
-    const found = state.savedRoutines.find(r => r.id === routineId);
+    const found = state.savedRoutines.find(r => r.id === routineId)
+      || OFFICIAL_ROUTINES.find(r => r.id === routineId);
     if (!found) return;
     state.activeMode = found.mode;
     state.settings[found.mode] = {
-      ...state.settings[found.mode],
+      ...defaults.settings[found.mode],
       ...found.config
     };
     const sanitized = sanitizeStoredData(state);
@@ -2272,6 +2671,41 @@
       showToast('Historial exportado correctamente.');
     } catch (_) {
       showToast('No se pudo exportar el historial.', 'warning');
+    }
+  }
+
+  function exportHistoryCsv() {
+    if (!state.history.length) return;
+    try {
+      const headers = ['ID', 'Fecha_ISO', 'Modo', 'Rondas', 'Duracion_Segundos', 'Duracion_Formato', 'Puntos_Aka', 'Puntos_Ao', 'Kcal_Estimadas'];
+      const rows = state.history.map(item => {
+        const durSec = Math.round((item.durationMs || 0) / 1000);
+        const durFmt = formatDuration(item.durationMs || 0);
+        return [
+          `"${String(item.id || '').replace(/"/g, '""')}"`,
+          `"${item.completedAt}"`,
+          `"${modeLabel(item.mode)}"`,
+          item.rounds || 1,
+          durSec,
+          `"${durFmt}"`,
+          item.score || 0,
+          item.scoreAo || 0,
+          item.kcal || 0
+        ].join(',');
+      });
+      const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `timer-round-historial-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      showToast('Historial exportado en formato CSV.');
+    } catch (_) {
+      showToast('No se pudo exportar el historial en CSV.', 'warning');
     }
   }
 
@@ -2363,7 +2797,7 @@
       pocketBtn.classList.toggle('active-icon', state.ui.pocketMode);
       pocketBtn.setAttribute('aria-pressed', String(state.ui.pocketMode));
     }
-    showToast(state.ui.pocketMode ? 'Modo Bolsillo activo (Pantalla apagada)' : 'Modo Bolsillo desactivado');
+    showToast(state.ui.pocketMode ? 'Modo Bolsillo (OLED) activo · Tocá la pantalla o presioná P para salir' : 'Modo Bolsillo desactivado');
   }
 
   function prepareAudio() {
@@ -2650,6 +3084,8 @@
   }
 
   function trapFocus(modal) {
+    if (!modal || modal.dataset.focusTrapped === 'true') return;
+    modal.dataset.focusTrapped = 'true';
     modal.addEventListener('keydown', event => {
       if (event.key !== 'Tab') return;
       const focusable = Array.from(modal.querySelectorAll('button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])'));
@@ -2670,12 +3106,15 @@
     state.ui.historyOpen = false;
     state.ui.confirmClearHistory = false;
     render();
-    if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') {
+    if (lastFocusedElement && lastFocusedElement.isConnected && typeof lastFocusedElement.focus === 'function') {
       lastFocusedElement.focus();
     } else {
       const historyBtn = document.getElementById('openHistoryButton');
-      if (historyBtn) historyBtn.focus();
+      if (historyBtn && typeof historyBtn.focus === 'function') {
+        historyBtn.focus();
+      }
     }
+    lastFocusedElement = null;
   }
 
   function toggleFullscreen() {
@@ -2698,6 +3137,13 @@
   }
 
   function onAppClick(event) {
+    if (state.ui.pocketMode) {
+      const pocketBtn = event.target.closest('[data-action="toggle-pocket"]');
+      if (!pocketBtn) {
+        togglePocketMode(false);
+        return;
+      }
+    }
     const button = event.target.closest('[data-action], [data-mode]');
     if (!button) return;
 
@@ -2732,7 +3178,11 @@
     if (action === 'cycle-penalty') {
       return cyclePenalty(button.dataset.fighter || 'aka');
     }
+    if (action === 'undo-score') {
+      return undoLastScoreAction();
+    }
     if (action === 'reset-score') {
+      pushScoreSnapshot('reset');
       state.session.score = 0;
       state.session.scoreAo = 0;
       state.session.senshu = '';
@@ -2740,6 +3190,7 @@
       state.session.penaltyAo = 0;
       state.session.advantageAnnounced = false;
       persistSessionSnapshot();
+      showToast('Marcador reiniciado. Tocá ↶ Deshacer (Z) si fue un error.');
       return render();
     }
     if (action === 'toggle-tatami') {
@@ -2833,6 +3284,20 @@
       return;
     }
     if (action === 'toggle-preference') return togglePreference(button.dataset.preference);
+    if (action === 'request-notifications') {
+      if (typeof window === 'undefined' || !('Notification' in window)) {
+        return showToast('Tu navegador no soporta notificaciones.', 'warning');
+      }
+      Notification.requestPermission().then(permission => {
+        render();
+        if (permission === 'granted') {
+          showToast('Notificaciones activadas para cuando la app esté en segundo plano.');
+        } else {
+          showToast('Permiso de notificaciones no concedido.', 'warning');
+        }
+      });
+      return;
+    }
     if (action === 'test-sound') {
       if (!state.preferences.sound) {
         return showToast('Los sonidos están desactivados en Configuración.', 'warning');
@@ -2843,6 +3308,26 @@
       prepareAudio();
       fireRandomReactionStimulus(getPlan('random'));
       return showToast('Estímulo de prueba emitido.');
+    }
+    if (action === 'test-voice') {
+      if (!state.preferences.voice) {
+        return showToast('La voz está desactivada en Configuración.', 'warning');
+      }
+      if (!('speechSynthesis' in window)) {
+        return showToast('Tu navegador no soporta síntesis de voz.', 'warning');
+      }
+      say('Timer Round listo. ¡A trabajar!', true);
+      return showToast('Voz de prueba emitida.');
+    }
+    if (action === 'test-vibration') {
+      if (!state.preferences.vibration) {
+        return showToast('La vibración está desactivada en Configuración.', 'warning');
+      }
+      if (!('vibrate' in navigator)) {
+        return showToast('Tu dispositivo no soporta vibración háptica.', 'warning');
+      }
+      vibrate([100, 60, 100, 60, 200]);
+      return showToast('Patrón de vibración emitido.');
     }
     if (action === 'set-sound-pack') {
       const key = button.dataset.soundPack;
@@ -2861,7 +3346,10 @@
     }
     if (action === 'filter-history') {
       state.ui.historyFilter = button.dataset.filter || 'all';
-      return render();
+      render();
+      const newActive = document.querySelector(`[data-action="filter-history"][data-filter="${state.ui.historyFilter}"]`);
+      if (newActive && typeof newActive.focus === 'function') newActive.focus();
+      return;
     }
     if (action === 'delete-history-item') {
       const id = button.dataset.historyId;
@@ -2887,6 +3375,7 @@
       return showToast('Historial borrado.');
     }
     if (action === 'export-history') return exportHistoryJson();
+    if (action === 'export-csv') return exportHistoryCsv();
     if (action === 'export-routines') return exportRoutinesJson();
     if (action === 'toggle-pocket') return togglePocketMode();
     if (action === 'fullscreen') return toggleFullscreen();
@@ -2920,6 +3409,26 @@
   }
 
   function onAppInput(event) {
+    if (event.target.id === 'historySearchInput') {
+      state.ui.historySearchQuery = event.target.value;
+      const historyList = document.querySelector('.history-list');
+      if (historyList) {
+        const filter = state.ui.historyFilter;
+        const q = state.ui.historySearchQuery.trim().toLowerCase();
+        const filtered = state.history.filter(item => {
+          if (filter !== 'all' && item.mode !== filter) return false;
+          if (!q) return true;
+          const modeTxt = modeLabel(item.mode).toLowerCase();
+          const dateTxt = new Date(item.completedAt).toLocaleDateString('es-AR').toLowerCase();
+          const scoreTxt = `aka ${item.score} ao ${item.scoreAo}`.toLowerCase();
+          return modeTxt.includes(q) || dateTxt.includes(q) || scoreTxt.includes(q);
+        });
+        historyList.innerHTML = filtered.length
+          ? filtered.map(renderHistoryItem).join('')
+          : `<p class="empty-history">${state.history.length ? 'No se encontraron sesiones que coincidan con la búsqueda.' : 'No hay sesiones registradas todavía.'}</p>`;
+      }
+      return;
+    }
     if (event.target.id === 'routineNameInput') {
       state.ui.routineNameDraft = event.target.value;
       return;
@@ -2951,7 +3460,15 @@
   function onAppKeydown(event) {
     if (event.target.matches('.timer-core') && (event.key === 'Enter' || event.key === ' ')) {
       event.preventDefault();
+      event.stopPropagation();
       state.session.running ? pauseSession() : startOrResume();
+      return;
+    }
+    if ((event.key === 'Enter' || event.key === ' ') && event.target.matches('.file-button')) {
+      event.preventDefault();
+      event.stopPropagation();
+      const input = event.target.querySelector('input[type="file"]');
+      if (input) input.click();
       return;
     }
     if (event.key === 'Enter' && event.target.id === 'routineNameInput') {
@@ -3008,6 +3525,7 @@
     });
 
     window.addEventListener('keydown', event => {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
       if (state.ui.historyOpen) {
         if (event.key === 'Escape') {
           event.preventDefault();
@@ -3015,17 +3533,30 @@
         }
         return;
       }
-      if (event.target.matches('input, textarea, select')) return;
+      if (event.target && typeof event.target.matches === 'function') {
+        if (event.target.matches('input, textarea, select')) return;
+      }
 
       if (event.code === 'Space') {
+        if (event.target && typeof event.target.matches === 'function' && event.target.matches('button, [role="button"], [role="tab"], .file-button')) {
+          return;
+        }
         event.preventDefault();
         state.session.running ? pauseSession() : startOrResume();
+      } else if (event.key.toLowerCase() === 'z' && (state.session.running || state.session.paused || (state.session.scoreHistory && state.session.scoreHistory.length))) {
+        undoLastScoreAction();
       } else if (event.key.toLowerCase() === 'c' && (state.session.running || state.session.paused)) {
         playTone(1320, 0.045, 'sine', 0.45);
         incrementScore(1, 'aka');
+      } else if (event.key.toLowerCase() === 'x' && (state.session.running || state.session.paused)) {
+        incrementScore(-1, 'aka');
       } else if (event.key.toLowerCase() === 'v' && (state.session.running || state.session.paused) && state.preferences.dualScore) {
         playTone(980, 0.045, 'sine', 0.45);
         incrementScore(1, 'ao');
+      } else if (event.key.toLowerCase() === 'b' && (state.session.running || state.session.paused) && state.preferences.dualScore) {
+        incrementScore(-1, 'ao');
+      } else if (event.key.toLowerCase() === 's' && canSkipPhase(state.session)) {
+        skipCurrentPhase();
       } else if (event.key.toLowerCase() === 't') {
         togglePreference('tatamiView');
         showToast(state.preferences.tatamiView ? 'Vista Tatami activada.' : 'Vista estándar activada.');
@@ -3126,6 +3657,7 @@
       incrementScore,
       toggleSenshu,
       cyclePenalty,
+      undoScore: undoLastScoreAction,
       addCustomCallout,
       removeCustomCallout,
       setMode,
@@ -3139,7 +3671,10 @@
       shareSessionResult,
       exportRoutines: exportRoutinesJson,
       importRoutines: importRoutinesFile,
+      exportHistoryCsv,
       togglePocket: togglePocketMode,
+      advancePhase,
+      tick,
       render
     },
     audio: {
@@ -3154,6 +3689,11 @@
       progressFor,
       progressTotalFor,
       calculateKcal,
+      getSessionTotalDuration,
+      recordPhaseElapsed,
+      getCombatResultMessage,
+      OFFICIAL_ROUTINES,
+      exportHistoryCsv,
       MET_VALUES,
       number,
       escapeHtml,

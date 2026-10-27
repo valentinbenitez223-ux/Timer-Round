@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timer-round-v14';
+const CACHE_NAME = 'timer-round-v16';
 const APP_SHELL = [
   './',
   './index.html',
@@ -7,6 +7,10 @@ const APP_SHELL = [
   './manifest.json',
   './icon.svg'
 ];
+
+function matchInAppCache(request, options) {
+  return caches.open(CACHE_NAME).then(cache => cache.match(request, options));
+}
 
 self.addEventListener('install', event => {
   event.waitUntil(
@@ -19,7 +23,11 @@ self.addEventListener('install', event => {
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))))
+      .then(keys => Promise.all(
+        keys
+          .filter(key => key.startsWith('timer-round-') && key !== CACHE_NAME)
+          .map(key => caches.delete(key))
+      ))
       .then(() => self.clients.claim())
   );
 });
@@ -54,10 +62,14 @@ self.addEventListener('fetch', event => {
             caches.open(CACHE_NAME)
               .then(cache => cache.put('./index.html', copy))
               .catch(() => {});
+            return response;
+          }
+          if (response.status >= 500) {
+            return matchInAppCache('./index.html', { ignoreSearch: true }).then(cached => cached || response);
           }
           return response;
         })
-        .catch(() => caches.match('./index.html', { ignoreSearch: true }))
+        .catch(() => matchInAppCache('./index.html', { ignoreSearch: true }))
     );
     return;
   }
@@ -73,6 +85,6 @@ self.addEventListener('fetch', event => {
         }
         return response;
       })
-      .catch(() => caches.match(event.request, { ignoreSearch: true }))
+      .catch(() => matchInAppCache(event.request, { ignoreSearch: true }))
   );
 });

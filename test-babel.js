@@ -121,9 +121,10 @@
       }).includes('minuto 2/10')
     );
 
-    assert('SOUND_PACKS expone los tres packs esperados y PENALTY_LEVELS incluye Hansoku (H)',
+    assert('SOUND_PACKS expone los 4 packs esperados (incluyendo buzzer) y PENALTY_LEVELS incluye Hansoku (H)',
       Array.isArray(utils.VALID_SOUND_PACKS) &&
-      utils.VALID_SOUND_PACKS.length === 3 &&
+      utils.VALID_SOUND_PACKS.length === 4 &&
+      utils.VALID_SOUND_PACKS.includes('buzzer') &&
       Array.isArray(utils.PENALTY_LEVELS) &&
       utils.PENALTY_LEVELS.includes('H')
     );
@@ -174,6 +175,204 @@
       utils.progressTotalFor({ phase: 'idle', plan: { durationMs: 60000, rounds: 1 } }) === 0 &&
       utils.progressTotalFor({ phase: 'finished', plan: { durationMs: 60000, rounds: 1 } }) === 1
     );
+
+    assert('getSessionTotalDuration() devuelve duración completa de la sesión y no solo la fase activa',
+      typeof utils.getSessionTotalDuration === 'function' &&
+      utils.getSessionTotalDuration({
+        phase: 'finished',
+        durationMs: 20000,
+        plan: { mode: 'tabata', durationMs: 230000, rounds: 8, workMs: 20000, restMs: 10000 }
+      }) === 230000
+    );
+
+    assert('sanitizeRoutineList() deduplica rutinas por firma (modo + nombre)',
+      (() => {
+        const dupes = [
+          { id: '1', mode: 'tabata', name: 'HIIT Intenso' },
+          { id: '2', mode: 'tabata', name: 'hiit intenso' },
+          { id: '3', mode: 'random', name: 'Combate 2m' }
+        ];
+        const res = utils.sanitizeRoutineList(dupes);
+        return res.length === 2 && res[0].name === 'HIIT Intenso' && res[1].name === 'Combate 2m';
+      })()
+    );
+
+    assert('undoScore() está disponible en actions del motor',
+      typeof target.api.actions.undoScore === 'function'
+    );
+
+    assert('recordPhaseElapsed() es idempotente y no duplica el tiempo transcurrido en llamadas consecutivas',
+      (() => {
+        const testSession = {
+          phase: 'work',
+          durationMs: 60000,
+          remainingMs: 0,
+          elapsedMs: 0,
+          phaseElapsedRecorded: false
+        };
+        utils.recordPhaseElapsed(testSession);
+        const afterFirst = testSession.elapsedMs;
+        utils.recordPhaseElapsed(testSession);
+        return afterFirst === 60000 && testSession.elapsedMs === 60000 && testSession.phaseElapsedRecorded === true;
+      })()
+    );
+
+    assert('sw.js aísla la búsqueda en caché con matchInAppCache',
+      (await fetch('sw.js').then(r => r.text())).includes('matchInAppCache')
+    );
+
+    assert('exportHistoryCsv() y OFFICIAL_ROUTINES están disponibles en el motor',
+      typeof target.api.actions.exportHistoryCsv === 'function' &&
+      Array.isArray(utils.OFFICIAL_ROUTINES) &&
+      utils.OFFICIAL_ROUTINES.length >= 5
+    );
+
+    assert('getCombatResultMessage() calcula victorias por puntos, Senshu y Hansoku correctamente',
+      utils.getCombatResultMessage({ score: 5, scoreAo: 2 }) === 'Victoria Aka (5 - 2)' &&
+      utils.getCombatResultMessage({ score: 3, scoreAo: 3, senshu: 'ao' }) === 'Victoria Ao por Senshu (3 - 3)' &&
+      utils.getCombatResultMessage({ score: 1, scoreAo: 0, penaltyAka: 5 }) === 'Victoria Ao · Hansoku Aka' &&
+      utils.getCombatResultMessage({ score: 8, scoreAo: 0 }) === 'Victoria Aka (+8 pts)'
+    );
+
+    assert('Supremacía arbitral WKF: Hansoku descalifica a Aka aun con ventaja de puntos (6 a 2)',
+      utils.getCombatResultMessage({ score: 6, scoreAo: 2, penaltyAka: 5 }) === 'Victoria Ao · Hansoku Aka'
+    );
+
+    assert('Prueba determinista: suspensión en Tabata 20/10/3 reanuda en R2 work con tiempos exactos', (() => {
+      const state = target.api.getState();
+      const origSession = state.session;
+      const origPrefs = state.preferences;
+      try {
+        const t0 = 100000;
+        state.preferences.cooldownSeconds = 0;
+        state.session = {
+          running: true,
+          paused: false,
+          phase: 'work',
+          round: 1,
+          phaseElapsedRecorded: false,
+          elapsedMs: 0,
+          durationMs: 20000,
+          remainingMs: 20000,
+          phaseStartedAt: t0,
+          endAt: t0 + 20000,
+          plan: { mode: 'tabata', durationMs: 80000, workMs: 20000, restMs: 10000, rounds: 3 },
+          cueFlags: {}
+        };
+        const wakeTime = t0 + 36000;
+        const origNow = Date.now;
+        const origFrameNow = target.frameWindow.Date.now;
+        Date.now = () => wakeTime;
+        target.frameWindow.Date.now = () => wakeTime;
+        try {
+          target.api.actions.tick();
+        } finally {
+          Date.now = origNow;
+          target.frameWindow.Date.now = origFrameNow;
+        }
+        const s = state.session;
+        return s.round === 2 && s.phase === 'work' && s.elapsedMs === 30000 && s.remainingMs === 14000;
+      } finally {
+        state.session = origSession;
+        state.preferences = origPrefs;
+      }
+    })());
+
+    assert('Prueba suspensión prolongada: sesión completa terminada registra duración y calorías exactas', (() => {
+      const state = target.api.getState();
+      const origSession = state.session;
+      const origPrefs = state.preferences;
+      const origHistory = state.history;
+      try {
+        const t0 = 100000;
+        state.preferences.cooldownSeconds = 0;
+        state.preferences.userWeightKg = 70;
+        state.session = {
+          running: true,
+          paused: false,
+          phase: 'work',
+          round: 1,
+          phaseElapsedRecorded: false,
+          elapsedMs: 0,
+          durationMs: 20000,
+          remainingMs: 20000,
+          phaseStartedAt: t0,
+          endAt: t0 + 20000,
+          plan: { mode: 'tabata', durationMs: 80000, workMs: 20000, restMs: 10000, rounds: 3 },
+          cueFlags: {}
+        };
+        const wakeTime = t0 + 100000;
+        const origNow = Date.now;
+        const origFrameNow = target.frameWindow.Date.now;
+        Date.now = () => wakeTime;
+        target.frameWindow.Date.now = () => wakeTime;
+        try {
+          target.api.actions.tick();
+        } finally {
+          Date.now = origNow;
+          target.frameWindow.Date.now = origFrameNow;
+        }
+        const s = state.session;
+        const latestHist = state.history[0];
+        return s.phase === 'finished' &&
+          s.effectiveDurationMs === 80000 &&
+          latestHist &&
+          latestHist.durationMs === 80000 &&
+          latestHist.plannedDurationMs === 80000;
+      } finally {
+        state.session = origSession;
+        state.preferences = origPrefs;
+        state.history = origHistory;
+      }
+    })());
+
+    assert('Salto de fase en pausa es silencioso y acumula solo el tiempo parcial transcurrido', (() => {
+      const state = target.api.getState();
+      const origSession = state.session;
+      try {
+        state.session = {
+          running: false,
+          paused: true,
+          phase: 'work',
+          round: 1,
+          phaseElapsedRecorded: false,
+          elapsedMs: 0,
+          durationMs: 20000,
+          remainingMs: 8000,
+          plan: { mode: 'tabata', durationMs: 80000, workMs: 20000, restMs: 10000, rounds: 3 },
+          cueFlags: {}
+        };
+        target.api.actions.skipCurrentPhase();
+        const s = state.session;
+        return s.phase === 'rest' && s.round === 1 && s.elapsedMs === 12000 && s.remainingMs === 10000 && s.paused === true;
+      } finally {
+        state.session = origSession;
+      }
+    })());
+
+    assert('Atajos de teclado ignoran combinaciones con Ctrl/Meta/Alt para evitar colisiones del sistema', (() => {
+      const state = target.api.getState();
+      const origSession = state.session;
+      try {
+        state.session = {
+          running: true,
+          paused: false,
+          phase: 'work',
+          round: 1,
+          durationMs: 20000,
+          remainingMs: 20000,
+          score: 0,
+          scoreAo: 0,
+          plan: { mode: 'tabata', durationMs: 80000, workMs: 20000, restMs: 10000, rounds: 3 },
+          cueFlags: {}
+        };
+        target.frameWindow.dispatchEvent(new target.frameWindow.KeyboardEvent('keydown', { key: 's', code: 'KeyS', ctrlKey: true, bubbles: true }));
+        target.frameWindow.dispatchEvent(new target.frameWindow.KeyboardEvent('keydown', { key: 'c', code: 'KeyC', ctrlKey: true, bubbles: true }));
+        return state.session.phase === 'work' && state.session.score === 0;
+      } finally {
+        state.session = origSession;
+      }
+    })());
   } else {
     assert('Motor TimerRound accesible en vista de prueba', false, 'No se encontró window.TimerRound');
   }
